@@ -1,7 +1,0 @@
-/Users/gabivlj/programming/Java/FTPsimulation/FTPserver/rust_server/ftp_server/target/debug/deps/ftp_server-f2dbc49947c8f5a2.rmeta: src/main.rs src/ftp/mod.rs src/tcp/mod.rs
-
-/Users/gabivlj/programming/Java/FTPsimulation/FTPserver/rust_server/ftp_server/target/debug/deps/ftp_server-f2dbc49947c8f5a2.d: src/main.rs src/ftp/mod.rs src/tcp/mod.rs
-
-src/main.rs:
-src/ftp/mod.rs:
-src/tcp/mod.rs:
