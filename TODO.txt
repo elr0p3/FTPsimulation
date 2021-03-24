@@ -1,0 +1,59 @@
+
+port 20 - send data
+port 21 - control commands and responses
+
+Active mode
+	client indicate listening port
+	server's 20th port connects to that port
+
+Pasive mode
+	server let know client which port needs to open
+	server connect to this port, start transfer
+
+
+Client send request to server, in text mode ending with CRLF
+Server response startwith 3 digits
+
+
+EXAMPLES commands
+Connection:	PORT <SP> <host-port> <CRLF>
+List files:	LIST [<SP> <pathname>] <CRLF>
+Download:	RETR <SP> <pahtname> <CRLF>
+Upload:		STOR <SP> <pathname> <CRLF>
+Close:		QUIT <CRLF>
+optional
+Authentication:	USER <SP> <username> <CRLF>
+				PASS <SP> <password> <CRLF>
+Get path:		PWD <CRLF>
+Change dir:		CWD <SP> <pathname> <CRLF>
+Create dir:		MKD <SP> <pathname> <CRLF>
+Remove dir:		RMD <SP> <pathname> <CRLF>
+Delete file:	DELE <SP> <pathname> <CRLF>
+Rename file/dir:RNFR <SP> <pathname> <CRLF>
+				RNTO <SP> <pathname> <CRLF>
+Passive mode:	PASV <CRLF>
+
+
+=   -   =   -   =   -   =   -   =   -   =   -   =   -   =   -   =   -   =   -
+
+
+
+[SERVER]
+Non blocking / thread poll connections
+Active mode
+user identification
+server log (json)
+directory system (chroot)
+receive/download files
+delete/rename files
+list files (plain text)
+file transference (binary)
+
+[CLIENT]
+Configurable port and ip to connect to the server
+ftp commands hidden to the user
+binary mode files
+plain text list
+GUI
+upload/download files
+delete/rename files
