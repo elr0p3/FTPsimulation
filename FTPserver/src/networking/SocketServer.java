@@ -11,6 +11,17 @@ import java.nio.channels.SocketChannel;
 import java.util.Iterator;
 import java.util.Set;
 
+
+// TODO
+interface Listener {
+	void connection(Selector selector, ServerSocketChannel listener, SocketChannel client);
+	
+	void write();
+	
+	void read();
+}
+
+
 public class SocketServer {
 	public static int DEFAULT_PORT = 7;
 	 
@@ -59,13 +70,12 @@ public class SocketServer {
 						 SocketChannel client = server.accept();
 						 System.out.println("Accepted connection from " + client);
 						 client.configureBlocking(false);
-						 SelectionKey clientKey = client.register(
-						 selector, SelectionKey.OP_WRITE | SelectionKey.OP_READ);
-						 ByteBuffer buffer = ByteBuffer.allocate(1024);					 
+						 SelectionKey clientKey = client.register(selector, SelectionKey.OP_WRITE | SelectionKey.OP_READ);						 
+						 ByteBuffer buffer = ByteBuffer.allocate(1024);
 						 clientKey.attach(buffer);
 					 }
 					 if (key.isReadable()) {
-						 SocketChannel client = (SocketChannel) key.channel();
+						 SocketChannel client = (SocketChannel) key.channel();						
 						 ByteBuffer output = (ByteBuffer) key.attachment();					 
 						 int bytesRead = client.read(output);
 					 }
