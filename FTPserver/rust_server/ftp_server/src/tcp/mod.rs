@@ -1,12 +1,18 @@
 #![allow(dead_code)]
-use mio::net::{TcpListener, TcpStream};
+use crate::ftp::{RequestContextMutex, RequestType};
 use mio::{event::Event, Events, Interest, Poll, Token};
+use mio::{
+    net::{TcpListener, TcpStream},
+    Waker,
+};
 use std::error::Error;
 use std::io::ErrorKind;
+use std::sync::{Arc, Mutex};
 
 // use crate::stats::program_information;
 
 const SERVER: Token = Token(0);
+const THREAD: Token = Token(2147483647);
 
 // pub fn convert_to_server(id: u64) -> u64 {
 //     id | (1 << 63)
@@ -16,7 +22,16 @@ const SERVER: Token = Token(0);
 //     id & (1 << 63) == 1
 // }
 
+// #[derive(Debug)]
+// pub enum ActionType {
+//     Readable,
+//     Writable,
+//     Disconnect,
+// }
+
 pub trait TCPImplementation {
+    fn action_list(&mut self) -> Arc<Mutex<Vec<(Token, RequestContextMutex, Interest)>>>;
+
     fn new_connection(
         &mut self,
         token_server: Token,
@@ -30,20 +45,49 @@ pub trait TCPImplementation {
     /// * When returning an error that it's not `WouldBlock`, it will call `close_connection`.
     /// * When returning an error that it's `NonBlocking` it will do nothing.
     /// * On OK it does nothing
-    fn write_connection(&mut self, poll: &Poll, event: &Event) -> Result<(), std::io::Error>;
+    fn write_connection(
+        &mut self,
+        poll: &Poll,
+        waker: Arc<Waker>,
+        event: &Event,
+    ) -> Result<(), std::io::Error>;
 
     /// Read connection
     /// ## Behaviour
     /// * When returning an error that it's not `WouldBlock`, it will call `close_connection`
     /// * When returning an error that it's `NonBlocking` it will do nothing,
     /// * On OK it does nothing
-    fn read_connection(&mut self, poll: &Poll, event: &Event) -> Result<(), std::io::Error>;
+    fn read_connection(
+        &mut self,
+        poll: &Poll,
+        waker: Arc<Waker>,
+        event: &Event,
+    ) -> Result<(), std::io::Error>;
 
     /// Close connection handler
     fn close_connection(&mut self, poll: &Poll, id: Token) -> Result<(), std::io::Error>;
 
     /// Function that will be called when the server needs a new id for the next connection
     fn next_id(&mut self) -> usize;
+}
+fn handle_request_type(
+    request: &mut RequestContextMutex,
+    poll: &Poll,
+    interest: Interest,
+    token: Token,
+) -> Result<(), std::io::Error> {
+    let mut r = request.lock().unwrap();
+    match &mut r.request_type {
+        RequestType::CommandTransfer(stream, _)
+        | RequestType::FileTransferActive(stream, _)
+        | RequestType::FileTransferPassive(stream, _) => {
+            poll.registry().register(stream, token, interest)?;
+        }
+        RequestType::PassiveModePort(stream) => {
+            poll.registry().register(stream, token, interest)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn create_server<T: AsRef<str>>(
@@ -63,8 +107,20 @@ pub fn create_server<T: AsRef<str>>(
     // Start listening for incoming connections.
     poll.registry()
         .register(&mut server, SERVER, Interest::READABLE)?;
-
+    // We need this so we can wake up the poll from another thread when we add new events
+    let waker = Arc::new(Waker::new(poll.registry(), THREAD)?);
     loop {
+        {
+            let actions = tcp_implementation.action_list();
+            println!("go");
+            let actions = actions.lock();
+            if let Ok(mut actions) = actions {
+                for (token, mut request, type_action) in actions.drain(0..) {
+                    handle_request_type(&mut request, &poll, type_action, token)?;
+                }
+            }
+            println!("iterated");
+        }
         // Poll Mio for events, blocking until we get an event.
         poll.poll(&mut events, None)?;
 
@@ -84,6 +140,9 @@ pub fn create_server<T: AsRef<str>>(
                     }
                     id = tcp_implementation.next_id();
                 }
+                THREAD => {
+                    continue;
+                }
                 Token(_) => {
                     if event.is_read_closed() {
                         if let Err(error) =
@@ -92,7 +151,9 @@ pub fn create_server<T: AsRef<str>>(
                             println!("message when closing a connection: {}", error);
                         }
                     } else if event.is_writable() {
-                        if let Err(err) = tcp_implementation.write_connection(&poll, event) {
+                        if let Err(err) =
+                            tcp_implementation.write_connection(&poll, waker.clone(), event)
+                        {
                             match err.kind() {
                                 ErrorKind::WouldBlock => {
                                     continue;
@@ -103,7 +164,9 @@ pub fn create_server<T: AsRef<str>>(
                             }
                         }
                     } else if event.is_readable() {
-                        if let Err(err) = tcp_implementation.read_connection(&poll, event) {
+                        if let Err(err) =
+                            tcp_implementation.read_connection(&poll, waker.clone(), event)
+                        {
                             match err.kind() {
                                 ErrorKind::WouldBlock => {
                                     continue;

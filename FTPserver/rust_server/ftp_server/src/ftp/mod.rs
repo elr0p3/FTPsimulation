@@ -1,17 +1,17 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    sync::MutexGuard,
 };
 
-use mio::{event::Event, Interest, Poll, Token};
+use mio::{event::Event, Interest, Poll, Token, Waker};
 use mio::{
     event::Source,
     net::{TcpListener, TcpStream},
 };
 use std::io::{Error, ErrorKind};
 use std::net::Shutdown;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc::channel, Arc, Mutex};
+use std::thread::spawn;
 
 use crate::tcp::TCPImplementation;
 
@@ -26,7 +26,7 @@ fn get_test_html(data: &str) -> Vec<u8> {
 }
 
 #[derive(Default, Debug, Clone)]
-struct BufferToWrite {
+pub struct BufferToWrite {
     buffer: Vec<u8>,
     offset: usize,
 }
@@ -47,7 +47,7 @@ impl BufferToWrite {
 /// - Find a way to increment the tokenId
 // TODO: Create user struct and all of that logic so we can keep a reference to a user in the request_context
 #[derive(Debug)]
-enum RequestType {
+pub enum RequestType {
     /// This requesst is a file transfer on passive mode.
     /// The token on the right is the identifier for the server listener!
     FileTransferPassive(TcpStream, BufferToWrite),
@@ -60,8 +60,8 @@ enum RequestType {
     PassiveModePort(TcpListener),
 }
 
-struct RequestContext {
-    request_type: RequestType,
+pub struct RequestContext {
+    pub request_type: RequestType,
     // socket_addr: SocketAddr,
 }
 
@@ -71,13 +71,18 @@ impl RequestContext {
     }
 }
 
-type RequestContextMutex = Arc<Mutex<RequestContext>>;
+pub type RequestContextMutex = Arc<Mutex<RequestContext>>;
+
+type Action = (Token, RequestContextMutex, Interest);
+
+type ActionList = Arc<Mutex<Vec<Action>>>;
 
 type HashMutex<K, V> = Arc<Mutex<HashMap<K, V>>>;
 
 pub struct FTPServer {
     /// We will need to put this an ArcMutex
     connections: HashMutex<Token, RequestContextMutex>,
+    actions: ActionList,
     current_id: usize,
     port: usize,
 }
@@ -88,6 +93,7 @@ impl FTPServer {
             connections: Arc::new(Mutex::new(HashMap::new())),
             current_id: 0,
             port: 50_000,
+            actions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -114,9 +120,36 @@ impl FTPServer {
         self.add_connection(Token(id), RequestType::PassiveModePort(listener));
         Ok(())
     }
+
+    fn deregister(&self, poll: &Poll, rc: &mut RequestContext) -> Result<(), Error> {
+        match &mut rc.request_type {
+            RequestType::CommandTransfer(stream, _) => {
+                poll.registry().deregister(stream)?;
+            }
+            RequestType::FileTransferActive(stream, _) => {
+                poll.registry().deregister(stream)?;
+            }
+            RequestType::FileTransferPassive(stream, _) => {
+                poll.registry().deregister(stream)?;
+            }
+            RequestType::PassiveModePort(port) => {
+                poll.registry().deregister(port)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn action_add(actions: &ActionList, action: Action) {
+        let mut actions_locked = actions.lock().unwrap();
+        actions_locked.push(action);
+    }
 }
 
 impl TCPImplementation for FTPServer {
+    fn action_list(&mut self) -> Arc<Mutex<Vec<Action>>> {
+        self.actions.clone()
+    }
+
     fn next_id(&mut self) -> usize {
         self.current_id += 1;
         self.current_id
@@ -139,45 +172,109 @@ impl TCPImplementation for FTPServer {
         Ok(())
     }
 
-    fn write_connection(&mut self, poll: &Poll, event: &Event) -> Result<(), Error> {
+    fn write_connection(
+        &mut self,
+        poll: &Poll,
+        waker: Arc<Waker>,
+        event: &Event,
+    ) -> Result<(), Error> {
+        // TODO Make this a macro!
         let map_conn = self.connections.clone();
+        let token = event.token();
         let map_conn = map_conn.lock().unwrap();
-        let conn = {
-            let connection = map_conn.get(&event.token()).ok_or(ErrorKind::NotFound)?;
+        let connection = {
+            let connection = map_conn.get(&token).ok_or(ErrorKind::NotFound)?;
             let arc = connection.clone();
             arc
         };
-        let mut conn = conn.lock().unwrap();
-        // let buff = get_test_html("hello world!");
-        match &mut conn.request_type {
-            RequestType::CommandTransfer(stream, to_write) => {
-                let written = stream.write(&to_write.buffer[to_write.offset..])?;
-                println!("writing! {}", written);
-                // Close connection, everything is written
-                if written + to_write.offset >= to_write.buffer.len() {
-                    stream.reregister(poll.registry(), event.token(), Interest::READABLE)?;
+        drop(map_conn);
+        let mut connection_mutex = connection.lock().unwrap();
+        self.deregister(poll, &mut connection_mutex)?;
+        drop(connection_mutex);
+        let actions_ref = self.action_list().clone();
+        spawn(move || {
+            let mut conn = connection.lock().unwrap();
+            match &mut conn.request_type {
+                RequestType::CommandTransfer(stream, to_write) => {
+                    let written = stream.write(&to_write.buffer[to_write.offset..]);
+                    if let Ok(written) = written {
+                        println!("writing! {}", written);
+                        // Close connection, everything is written
+                        if written + to_write.offset >= to_write.buffer.len() {
+                            // stream.reregister(poll.registry(), token, Interest::READABLE)?;
+                            println!("readable now");
+                            FTPServer::action_add(
+                                &actions_ref,
+                                (token, connection.clone(), Interest::READABLE),
+                            );
+                            waker.wake()?;
+                        } else {
+                            to_write.offset += written;
+                            FTPServer::action_add(
+                                &actions_ref,
+                                (token, connection.clone(), Interest::WRITABLE),
+                            );
+                            waker.wake()?;
+                        }
+                    } else if let Err(err) = written {
+                        if err.kind() == ErrorKind::WouldBlock {
+                            FTPServer::action_add(
+                                &actions_ref,
+                                (token, connection.clone(), Interest::WRITABLE),
+                            )
+                        } else {
+                            stream.shutdown(Shutdown::Both)?;
+                            println!("error writing because: {}", err);
+                        }
+                    }
+                    Ok(())
                 }
-                // We would need to handle some offset, but atm with testing HTML we just do this
-                Ok(())
-            }
 
-            // NOTE: This will have custom behaviours in the future
-            RequestType::FileTransferPassive(stream, to_write) => {
-                let written = stream.write(&to_write.buffer[to_write.offset..])?;
-                println!("writing file transfer! {}", written);
-                if written + to_write.offset >= to_write.buffer.len() {
-                    stream.shutdown(Shutdown::Both)?;
-                    stream.deregister(poll.registry())?;
-                    return Ok(());
+                // NOTE: This will have custom behaviours in the future
+                RequestType::FileTransferPassive(stream, to_write) => {
+                    let written = stream.write(&to_write.buffer[to_write.offset..]);
+                    if let Ok(written) = written {
+                        println!("writing file transfer! {}", written);
+                        if written + to_write.offset >= to_write.buffer.len() {
+                            stream.shutdown(Shutdown::Both)?;
+                            // stream.deregister(poll.registry())?;
+                            // No need because we already disconnected at the beginning
+                            // FTPServer::action_add(
+                            //     &actions_ref,
+                            //     (token, connection.clone(), ActionType::Disconnect),
+                            // );
+                            return Ok(());
+                        }
+                        to_write.offset += written;
+                        FTPServer::action_add(
+                            &actions_ref,
+                            (token, connection.clone(), Interest::WRITABLE),
+                        );
+                        waker.wake()?;
+                    } else if let Err(err) = written {
+                        if err.kind() == ErrorKind::WouldBlock {
+                            FTPServer::action_add(
+                                &actions_ref,
+                                (token, connection.clone(), Interest::WRITABLE),
+                            );
+                        } else {
+                            stream.shutdown(Shutdown::Both)?;
+                        }
+                    }
+                    Ok(())
                 }
-                to_write.offset += written;
-                Ok(())
+                _ => Err(Error::from(ErrorKind::NotFound)),
             }
-            _ => Err(Error::from(ErrorKind::NotFound)),
-        }
+        });
+        Ok(())
     }
 
-    fn read_connection(&mut self, poll: &Poll, event: &Event) -> Result<(), Error> {
+    fn read_connection(
+        &mut self,
+        poll: &Poll,
+        waker: Arc<Waker>,
+        event: &Event,
+    ) -> Result<(), Error> {
         // first read
         let map_conn = self.connections.clone();
         let map_conn = map_conn.lock().unwrap();
@@ -248,6 +345,7 @@ impl TCPImplementation for FTPServer {
             let arc = connection.unwrap().clone();
             arc
         };
+        drop(map_conn);
         let mut conn = conn.lock().unwrap();
         match &mut conn.request_type {
             RequestType::FileTransferActive(stream, _)
