@@ -1,15 +1,17 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    ops::Deref,
+    sync::MutexGuard,
 };
 
-use std::io::{Error, ErrorKind};
-
-use std::net::Shutdown;
-
-use mio::net::TcpStream;
 use mio::{event::Event, Interest, Poll, Token};
+use mio::{
+    event::Source,
+    net::{TcpListener, TcpStream},
+};
+use std::io::{Error, ErrorKind};
+use std::net::Shutdown;
+use std::sync::{Arc, Mutex};
 
 use crate::tcp::TCPImplementation;
 
@@ -23,58 +25,103 @@ fn get_test_html(data: &str) -> Vec<u8> {
     .to_vec();
 }
 
-/// We need to think about still
-/// - concurrency (we need to adapt things to concurrency)
-/// - storing user state (what do we need?)
-/// - storing file state in file transfer
-// TODO: Create user struct and all of that logic so we can keep a reference to a user in the request_context
-#[derive(Clone, Copy, Debug)]
-enum RequestType {
-    FileTransfer,
-    CommandTransfer,
-    Server,
+#[derive(Default, Debug, Clone)]
+struct BufferToWrite {
+    buffer: Vec<u8>,
+    offset: usize,
 }
 
-struct RequestContext {
-    request_type: RequestType,
-    stream: TcpStream,
-}
-
-impl RequestContext {
-    fn new(stream: TcpStream, request_type: RequestType) -> Self {
+impl BufferToWrite {
+    fn new(vector: Vec<u8>) -> Self {
         Self {
-            stream,
-            request_type,
+            buffer: vector,
+            offset: 0,
         }
     }
 }
 
+/// We need to think about still
+/// - concurrency (we need to adapt things to concurrency)
+/// - storing user state (what do we need?)
+/// - storing file state in file transfer
+/// - Find a way to increment the tokenId
+// TODO: Create user struct and all of that logic so we can keep a reference to a user in the request_context
+#[derive(Debug)]
+enum RequestType {
+    /// This requesst is a file transfer on passive mode.
+    /// The token on the right is the identifier for the server listener!
+    FileTransferPassive(TcpStream, BufferToWrite),
+
+    FileTransferActive(TcpStream, BufferToWrite),
+
+    CommandTransfer(TcpStream, BufferToWrite),
+
+    /// This is the passive mode port that will accept connections
+    PassiveModePort(TcpListener),
+}
+
+struct RequestContext {
+    request_type: RequestType,
+    // socket_addr: SocketAddr,
+}
+
+impl RequestContext {
+    fn new(request_type: RequestType) -> Self {
+        Self { request_type }
+    }
+}
+
+type RequestContextMutex = Arc<Mutex<RequestContext>>;
+
+type HashMutex<K, V> = Arc<Mutex<HashMap<K, V>>>;
+
 pub struct FTPServer {
-    connections: HashMap<Token, RequestContext>,
+    /// We will need to put this an ArcMutex
+    connections: HashMutex<Token, RequestContextMutex>,
+    current_id: usize,
+    port: usize,
 }
 
 impl FTPServer {
     pub fn new() -> Self {
         Self {
-            connections: HashMap::new(),
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            current_id: 0,
+            port: 50_000,
         }
     }
 
-    fn add_connection(&mut self, token: Token, tcp_stream: TcpStream, request_type: RequestType) {
-        self.connections
-            .insert(token, RequestContext::new(tcp_stream, request_type));
+    fn add_connection(&mut self, token: Token, request_type: RequestType) {
+        self.connections.lock().unwrap().insert(
+            token,
+            Arc::new(Mutex::new(RequestContext::new(request_type))),
+        );
     }
 
-    fn get_connection_mut<'a>(&'a mut self, token: Token) -> Option<&'a mut RequestContext> {
-        self.connections.get_mut(&token)
-    }
-
-    fn get_connection<'a>(&'a self, token: Token) -> Option<&'a RequestContext> {
-        self.connections.get(&token)
+    fn new_passive_listener(&mut self, poll: &Poll) -> Result<(), String> {
+        let port = self.port;
+        self.port += 1;
+        let id = self.next_id();
+        let mut listener = TcpListener::bind(
+            format!("127.0.0.1:{}", port)
+                .parse()
+                .map_err(|_| format!("can't bind to this address"))?,
+        )
+        .map_err(|_| format!("can't bind to this port"))?;
+        poll.registry()
+            .register(&mut listener, Token(id), Interest::READABLE)
+            .map_err(|_| format!("cannot register this socket"))?;
+        self.add_connection(Token(id), RequestType::PassiveModePort(listener));
+        Ok(())
     }
 }
 
 impl TCPImplementation for FTPServer {
+    fn next_id(&mut self) -> usize {
+        self.current_id += 1;
+        self.current_id
+    }
+
     fn new_connection(
         &mut self,
         _: Token,
@@ -85,58 +132,138 @@ impl TCPImplementation for FTPServer {
         println!("new connection!");
         poll.registry()
             .register(&mut stream, token, Interest::READABLE)?;
-        self.add_connection(token, stream, RequestType::CommandTransfer);
+        self.add_connection(
+            token,
+            RequestType::CommandTransfer(stream, BufferToWrite::default()),
+        );
         Ok(())
     }
 
-    fn write_connection(&mut self, _: &Poll, event: &Event) -> Result<(), Error> {
-        if let Some(conn) = self.get_connection_mut(event.token()) {
-            let buff = get_test_html("hello world!");
-            let written = conn.stream.write(&buff)?;
-            println!("writing! {}", written);
-            // Close connection, everything is written
-            if written >= buff.len() {
-                // Just close connection
-                return Err(Error::from(ErrorKind::Other));
+    fn write_connection(&mut self, poll: &Poll, event: &Event) -> Result<(), Error> {
+        let map_conn = self.connections.clone();
+        let map_conn = map_conn.lock().unwrap();
+        let conn = {
+            let connection = map_conn.get(&event.token()).ok_or(ErrorKind::NotFound)?;
+            let arc = connection.clone();
+            arc
+        };
+        let mut conn = conn.lock().unwrap();
+        // let buff = get_test_html("hello world!");
+        match &mut conn.request_type {
+            RequestType::CommandTransfer(stream, to_write) => {
+                let written = stream.write(&to_write.buffer[to_write.offset..])?;
+                println!("writing! {}", written);
+                // Close connection, everything is written
+                if written + to_write.offset >= to_write.buffer.len() {
+                    stream.reregister(poll.registry(), event.token(), Interest::READABLE)?;
+                }
+                // We would need to handle some offset, but atm with testing HTML we just do this
+                Ok(())
             }
-            // We would need to handle some offset, but atm with testing HTML we just do this
-            Ok(())
-        } else {
-            Err(Error::from(ErrorKind::NotFound))
+
+            // NOTE: This will have custom behaviours in the future
+            RequestType::FileTransferPassive(stream, to_write) => {
+                let written = stream.write(&to_write.buffer[to_write.offset..])?;
+                println!("writing file transfer! {}", written);
+                if written + to_write.offset >= to_write.buffer.len() {
+                    stream.shutdown(Shutdown::Both)?;
+                    stream.deregister(poll.registry())?;
+                    return Ok(());
+                }
+                to_write.offset += written;
+                Ok(())
+            }
+            _ => Err(Error::from(ErrorKind::NotFound)),
         }
     }
 
     fn read_connection(&mut self, poll: &Poll, event: &Event) -> Result<(), Error> {
-        if let Some(conn) = self.get_connection_mut(event.token()) {
-            let mut buff = [0; 10024];
-            let read = conn.stream.read(&mut buff)?;
-            println!("read buffer: {}", read);
-            // Close connection, everything is written
-            if read >= buff.len() {
-                println!("f");
-                // Just close connection if the request is too big at the moment
-                return Err(Error::from(ErrorKind::Other));
+        // first read
+        let map_conn = self.connections.clone();
+        let map_conn = map_conn.lock().unwrap();
+        let conn = {
+            let connection = map_conn.get(&event.token()).ok_or(ErrorKind::NotFound)?;
+            let arc = connection.clone();
+            arc
+        };
+        // drop mutex
+        drop(map_conn);
+        let mut conn = conn.lock().unwrap();
+        match &mut conn.request_type {
+            RequestType::CommandTransfer(stream, to_write) => {
+                let mut buff = [0; 10024];
+                let read = stream.read(&mut buff)?;
+                println!("Read buffer: {}", read);
+                // temporal condition
+                if read >= buff.len() {
+                    // Just close connection if the request is too big at the moment
+                    return Err(Error::from(ErrorKind::Other));
+                }
+                if read == 5 {
+                    self.new_passive_listener(poll)
+                        .map_err(|_| ErrorKind::InvalidData)?;
+                    println!("** New port on {}", self.port - 1);
+                    to_write.buffer.append(&mut get_test_html(
+                        format!("Connect to port: {}", self.port - 1).as_str(),
+                    ));
+                } else {
+                    to_write.buffer.append(&mut get_test_html("HI"));
+                }
+                poll.registry().deregister(stream)?;
+                poll.registry()
+                    .register(stream, event.token(), Interest::WRITABLE)?;
+                Ok(())
             }
 
-            poll.registry().deregister(&mut conn.stream)?;
+            RequestType::PassiveModePort(listener) => {
+                let (mut stream, _addr) = listener.accept()?;
+                let tok = Token(self.next_id());
+                poll.registry()
+                    .register(&mut stream, tok, Interest::WRITABLE)?;
+                self.add_connection(
+                    tok,
+                    RequestType::FileTransferPassive(
+                        stream,
+                        BufferToWrite::new(get_test_html("HELLO")),
+                    ),
+                );
+                // Remove the listener
+                self.connections.lock().unwrap().remove(&event.token());
+                poll.registry().deregister(listener)?;
+                Ok(())
+            }
 
-            // It's good!
-            poll.registry()
-                .register(&mut conn.stream, event.token(), Interest::WRITABLE)?;
-
-            Ok(())
-        } else {
-            Err(Error::from(ErrorKind::NotFound))
+            _ => unimplemented!("Unimplemented Request type: {:?}", conn.request_type),
         }
     }
 
     fn close_connection(&mut self, poll: &Poll, token: Token) -> Result<(), Error> {
-        if let Some(conn) = self.get_connection_mut(token) {
-            poll.registry().deregister(&mut conn.stream)?;
-        } else {
-            return Ok(());
+        let map_conn = self.connections.clone();
+        let map_conn = map_conn.lock().unwrap();
+        let conn = {
+            let connection = map_conn.get(&token);
+            if connection.is_none() {
+                return Ok(());
+            }
+            let arc = connection.unwrap().clone();
+            arc
+        };
+        let mut conn = conn.lock().unwrap();
+        match &mut conn.request_type {
+            RequestType::FileTransferActive(stream, _)
+            | RequestType::FileTransferPassive(stream, _)
+            | RequestType::CommandTransfer(stream, _) => {
+                poll.registry().deregister(stream)?;
+                stream.shutdown(Shutdown::Both)?;
+                println!("connection with the client was closed");
+            }
+            RequestType::PassiveModePort(stream) => {
+                // We actually just deregister when we write
+                poll.registry().deregister(stream)?;
+                println!("closed a connection!");
+            }
         }
-        self.connections.remove(&token);
+        self.connections.lock().unwrap().remove(&token);
         Ok(())
     }
 }

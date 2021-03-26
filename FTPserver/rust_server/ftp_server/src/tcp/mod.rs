@@ -6,8 +6,15 @@ use std::io::ErrorKind;
 
 // use crate::stats::program_information;
 
-// Some tokens to allow us to identify which event is for which socket.
 const SERVER: Token = Token(0);
+
+// pub fn convert_to_server(id: u64) -> u64 {
+//     id | (1 << 63)
+// }
+
+// pub fn is_server(id: u64) -> bool {
+//     id & (1 << 63) == 1
+// }
 
 pub trait TCPImplementation {
     fn new_connection(
@@ -18,11 +25,25 @@ pub trait TCPImplementation {
         stream: TcpStream,
     ) -> Result<(), std::io::Error>;
 
+    /// Write connection
+    /// ## Behaviour
+    /// * When returning an error that it's not `WouldBlock`, it will call `close_connection`.
+    /// * When returning an error that it's `NonBlocking` it will do nothing.
+    /// * On OK it does nothing
     fn write_connection(&mut self, poll: &Poll, event: &Event) -> Result<(), std::io::Error>;
 
+    /// Read connection
+    /// ## Behaviour
+    /// * When returning an error that it's not `WouldBlock`, it will call `close_connection`
+    /// * When returning an error that it's `NonBlocking` it will do nothing,
+    /// * On OK it does nothing
     fn read_connection(&mut self, poll: &Poll, event: &Event) -> Result<(), std::io::Error>;
 
+    /// Close connection handler
     fn close_connection(&mut self, poll: &Poll, id: Token) -> Result<(), std::io::Error>;
+
+    /// Function that will be called when the server needs a new id for the next connection
+    fn next_id(&mut self) -> usize;
 }
 
 pub fn create_server<T: AsRef<str>>(
@@ -34,7 +55,7 @@ pub fn create_server<T: AsRef<str>>(
     // Create storage for events.
     let mut events = Events::with_capacity(128);
     // Unique id for a connection
-    let mut id = 2;
+    let mut id = tcp_implementation.next_id();
     // Setup the server socket.
     let addr = addr.as_ref().parse()?;
     // Main server listener, even though you can create more bindings
@@ -42,6 +63,7 @@ pub fn create_server<T: AsRef<str>>(
     // Start listening for incoming connections.
     poll.registry()
         .register(&mut server, SERVER, Interest::READABLE)?;
+
     loop {
         // Poll Mio for events, blocking until we get an event.
         poll.poll(&mut events, None)?;
@@ -55,22 +77,20 @@ pub fn create_server<T: AsRef<str>>(
                     // If this is an event for the server, it means a connection
                     // is ready to be accepted.
                     let (stream, _addr) = server.accept()?;
-                    // // Register the connection to the server
-                    // // handler.new_connection(stream, Token(id), &poll)?;
-                    // poll.registry()
-                    //     .register(&mut stream, Token(id), Interest::READABLE)?;
-                    // Save this connection's stream relating it to the id
                     if let Err(_) =
                         tcp_implementation.new_connection(SERVER, Token(id), &poll, stream)
                     {
                         tcp_implementation.close_connection(&poll, Token(id))?;
                     }
-                    // connections.insert(Token(id), RequestContext::new(stream));
-                    id += 1;
+                    id = tcp_implementation.next_id();
                 }
                 Token(_) => {
                     if event.is_read_closed() {
-                        tcp_implementation.close_connection(&poll, event.token())?;
+                        if let Err(error) =
+                            tcp_implementation.close_connection(&poll, event.token())
+                        {
+                            println!("message when closing a connection: {}", error);
+                        }
                     } else if event.is_writable() {
                         if let Err(err) = tcp_implementation.write_connection(&poll, event) {
                             match err.kind() {
@@ -83,8 +103,22 @@ pub fn create_server<T: AsRef<str>>(
                             }
                         }
                     } else if event.is_readable() {
-                        if let Err(_) = tcp_implementation.read_connection(&poll, event) {
-                            tcp_implementation.close_connection(&poll, event.token())?;
+                        if let Err(err) = tcp_implementation.read_connection(&poll, event) {
+                            match err.kind() {
+                                ErrorKind::WouldBlock => {
+                                    continue;
+                                }
+                                _ => {
+                                    if let Err(err) =
+                                        tcp_implementation.close_connection(&poll, event.token())
+                                    {
+                                        println!(
+                                            "something happened when closing a socket: {}",
+                                            err
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                 }
