@@ -3,14 +3,11 @@ use std::{
     io::{Read, Write},
 };
 
+use mio::net::{TcpListener, TcpStream};
 use mio::{event::Event, Interest, Poll, Token, Waker};
-use mio::{
-    event::Source,
-    net::{TcpListener, TcpStream},
-};
 use std::io::{Error, ErrorKind};
 use std::net::Shutdown;
-use std::sync::{mpsc::channel, Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 
 use crate::tcp::TCPImplementation;
@@ -41,7 +38,6 @@ impl BufferToWrite {
 }
 
 /// We need to think about still
-/// - concurrency (we need to adapt things to concurrency)
 /// - storing user state (what do we need?)
 /// - storing file state in file transfer
 /// - Find a way to increment the tokenId
@@ -80,7 +76,6 @@ type ActionList = Arc<Mutex<Vec<Action>>>;
 type HashMutex<K, V> = Arc<Mutex<HashMap<K, V>>>;
 
 pub struct FTPServer {
-    /// We will need to put this an ArcMutex
     connections: HashMutex<Token, RequestContextMutex>,
     actions: ActionList,
     current_id: usize,
@@ -179,9 +174,9 @@ impl TCPImplementation for FTPServer {
         event: &Event,
     ) -> Result<(), Error> {
         // TODO Make this a macro!
-        let map_conn = self.connections.clone();
+        let map_conn_arc = self.connections.clone();
         let token = event.token();
-        let map_conn = map_conn.lock().unwrap();
+        let map_conn = map_conn_arc.lock().unwrap();
         let connection = {
             let connection = map_conn.get(&token).ok_or(ErrorKind::NotFound)?;
             let arc = connection.clone();
@@ -199,16 +194,14 @@ impl TCPImplementation for FTPServer {
                     let written = stream.write(&to_write.buffer[to_write.offset..]);
                     if let Ok(written) = written {
                         println!("writing! {}", written);
-                        // Close connection, everything is written
                         if written + to_write.offset >= to_write.buffer.len() {
-                            // stream.reregister(poll.registry(), token, Interest::READABLE)?;
-                            println!("readable now");
                             FTPServer::action_add(
                                 &actions_ref,
                                 (token, connection.clone(), Interest::READABLE),
                             );
                             waker.wake()?;
                         } else {
+                            // Keep writing
                             to_write.offset += written;
                             FTPServer::action_add(
                                 &actions_ref,
@@ -237,12 +230,6 @@ impl TCPImplementation for FTPServer {
                         println!("writing file transfer! {}", written);
                         if written + to_write.offset >= to_write.buffer.len() {
                             stream.shutdown(Shutdown::Both)?;
-                            // stream.deregister(poll.registry())?;
-                            // No need because we already disconnected at the beginning
-                            // FTPServer::action_add(
-                            //     &actions_ref,
-                            //     (token, connection.clone(), ActionType::Disconnect),
-                            // );
                             return Ok(());
                         }
                         to_write.offset += written;
@@ -259,6 +246,8 @@ impl TCPImplementation for FTPServer {
                             );
                         } else {
                             stream.shutdown(Shutdown::Both)?;
+                            let mut map_conn = map_conn_arc.lock().unwrap();
+                            map_conn.remove(&token);
                         }
                     }
                     Ok(())
@@ -347,6 +336,7 @@ impl TCPImplementation for FTPServer {
         };
         drop(map_conn);
         let mut conn = conn.lock().unwrap();
+        self.connections.lock().unwrap().remove(&token);
         match &mut conn.request_type {
             RequestType::FileTransferActive(stream, _)
             | RequestType::FileTransferPassive(stream, _)
@@ -361,7 +351,6 @@ impl TCPImplementation for FTPServer {
                 println!("closed a connection!");
             }
         }
-        self.connections.lock().unwrap().remove(&token);
         Ok(())
     }
 }
