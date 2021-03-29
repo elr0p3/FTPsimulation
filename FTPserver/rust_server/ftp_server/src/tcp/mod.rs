@@ -79,12 +79,12 @@ fn handle_request_type(
     let mut r = request.lock().unwrap();
     match &mut r.request_type {
         RequestType::CommandTransfer(stream, _)
-        | RequestType::FileTransferActive(stream, _)
-        | RequestType::FileTransferPassive(stream, _) => {
-            poll.registry().register(stream, token, interest)?;
+        | RequestType::FileTransferActive(stream, _, _)
+        | RequestType::FileTransferPassive(stream, _, _) => {
+            poll.registry().reregister(stream, token, interest)?;
         }
-        RequestType::PassiveModePort(stream) => {
-            poll.registry().register(stream, token, interest)?;
+        RequestType::PassiveModePort(stream, _) => {
+            poll.registry().reregister(stream, token, interest)?;
         }
     }
     Ok(())
@@ -112,14 +112,12 @@ pub fn create_server<T: AsRef<str>>(
     loop {
         {
             let actions = tcp_implementation.action_list();
-            println!("go");
             let actions = actions.lock();
             if let Ok(mut actions) = actions {
                 for (token, mut request, type_action) in actions.drain(0..) {
                     handle_request_type(&mut request, &poll, type_action, token)?;
                 }
             }
-            println!("iterated");
         }
         // Poll Mio for events, blocking until we get an event.
         poll.poll(&mut events, None)?;
