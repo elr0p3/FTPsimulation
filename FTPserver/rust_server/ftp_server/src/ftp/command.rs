@@ -48,12 +48,12 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
         expects_byte(
             command[command.len() - 1],
             b'\n',
-            "All commands should finish with \r\n",
+            "All commands should finish with slash r slash n",
         )?;
         expects_byte(
             command[command.len() - 2],
             b'\r',
-            "All commands should finish with \r\n",
+            "All commands should finish with slash r slash n",
         )?;
         // For maximum performance, we are gonna use a trie of matches
         match command[0] {

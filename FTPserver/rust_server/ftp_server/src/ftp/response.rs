@@ -32,4 +32,16 @@ impl Response {
     pub fn success_transfering_file() -> Response {
         Response::new_from_enums(CodeFirst::Positive, CodeSecond::Syntax, 1)
     }
+
+    pub fn command_okay() -> Response {
+        Response::new_from_enums(CodeFirst::Positive, CodeSecond::Syntax, 0)
+    }
+
+    pub fn bad_sequence_of_commands() -> Response {
+        Response::new_from_enums(
+            CodeFirst::PermanentNegativeCompletion,
+            CodeSecond::Syntax,
+            3,
+        )
+    }
 }

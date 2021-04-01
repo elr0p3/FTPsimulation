@@ -78,7 +78,7 @@ fn handle_request_type(
 ) -> Result<(), std::io::Error> {
     let mut r = request.lock().unwrap();
     match &mut r.request_type {
-        RequestType::CommandTransfer(stream, _)
+        RequestType::CommandTransfer(stream, _, _)
         | RequestType::FileTransferActive(stream, _, _)
         | RequestType::FileTransferPassive(stream, _, _) => {
             poll.registry().reregister(stream, token, interest)?;

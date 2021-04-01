@@ -12,6 +12,7 @@ use response::Response;
 
 use mio::net::{TcpListener, TcpStream};
 use mio::{event::Event, Interest, Poll, Token, Waker};
+use std::convert::TryFrom;
 use std::io::{Error, ErrorKind};
 use std::net::Shutdown;
 use std::sync::{Arc, Mutex};
@@ -46,6 +47,16 @@ impl BufferToWrite {
             offset: 0,
         }
     }
+
+    fn reset(&mut self, vector: Vec<u8>) {
+        self.buffer = vector;
+        self.offset = 0;
+    }
+
+    fn reset_str(&mut self, vector: &str) {
+        self.buffer = vector.as_bytes().to_vec();
+        self.offset = 0;
+    }
 }
 
 enum FileTransferType {
@@ -71,13 +82,15 @@ pub enum RequestType {
     /// so we can send a command when the download is finished!
     FileTransferPassive(TcpStream, BufferToWrite, Token),
 
-    /// This requesst is a file transfer on active mode.
-    /// The token on the right is the identifier for the server listener!
+    /// This requesst is a file transfer on active mode.    
     /// Also the token is for referencing the `CommandTransfer` req_ctx connection
     /// so we can send a command when the download is finished!
     FileTransferActive(TcpStream, BufferToWrite, Token),
 
-    CommandTransfer(TcpStream, BufferToWrite),
+    /// TcpStream of the connection
+    /// BufferToWrite is the buffer that is gonna be written on Write mode
+    /// Option<Token> is the opened PassiveModePort/FileTransferActive/FileTransferPassive
+    CommandTransfer(TcpStream, BufferToWrite, Option<Token>),
 
     /// This is the passive mode port that will accept connections
     /// It has a token where it references the CommandTransfer request_ctx
@@ -154,7 +167,7 @@ impl FTPServer {
 
     fn deregister(&self, poll: &Poll, rc: &mut RequestContext) -> Result<(), Error> {
         match &mut rc.request_type {
-            RequestType::CommandTransfer(stream, _) => {
+            RequestType::CommandTransfer(stream, _, _) => {
                 poll.registry().deregister(stream)?;
             }
 
@@ -169,6 +182,26 @@ impl FTPServer {
             RequestType::PassiveModePort(port, _) => {
                 poll.registry().deregister(port)?;
             }
+        }
+        Ok(())
+    }
+
+    fn deregister_and_shutdown(&self, poll: &Poll, rc: &mut RequestContext) -> Result<(), Error> {
+        let _ = self.deregister(poll, rc);
+        match &mut rc.request_type {
+            RequestType::CommandTransfer(stream, _, _) => {
+                stream.shutdown(Shutdown::Both)?;
+            }
+
+            RequestType::FileTransferActive(stream, _, _) => {
+                stream.shutdown(Shutdown::Both)?;
+            }
+
+            RequestType::FileTransferPassive(stream, _, _) => {
+                stream.shutdown(Shutdown::Both)?;
+            }
+
+            RequestType::PassiveModePort(port, _) => {}
         }
         Ok(())
     }
@@ -219,6 +252,7 @@ impl TCPImplementation for FTPServer {
                     Response::service_ready(),
                     "Service ready for new user.",
                 )),
+                None,
             ),
         );
         Ok(())
@@ -247,7 +281,7 @@ impl TCPImplementation for FTPServer {
         spawn(move || {
             let mut conn = connection.lock().unwrap();
             match &mut conn.request_type {
-                RequestType::CommandTransfer(stream, to_write) => {
+                RequestType::CommandTransfer(stream, to_write, _) => {
                     let written = stream.write(&to_write.buffer[to_write.offset..]);
                     if let Ok(written) = written {
                         println!("writing! {}", written);
@@ -296,7 +330,7 @@ impl TCPImplementation for FTPServer {
                                 let other_command_connection = command_connection.clone();
                                 let mut command_connection_mutex =
                                     command_connection.lock().unwrap();
-                                if let RequestType::CommandTransfer(_, buffer_to_write) =
+                                if let RequestType::CommandTransfer(_, buffer_to_write, _) =
                                     &mut command_connection_mutex.request_type
                                 {
                                     println!("succesfully sending to the client!");
@@ -362,7 +396,7 @@ impl TCPImplementation for FTPServer {
         drop(map_conn);
         let mut conn = conn.lock().unwrap();
         match &mut conn.request_type {
-            RequestType::CommandTransfer(stream, to_write) => {
+            RequestType::CommandTransfer(stream, to_write, _) => {
                 // Initialize a big buffer
                 let mut buff = [0; 10024];
 
@@ -377,27 +411,110 @@ impl TCPImplementation for FTPServer {
                     return Err(Error::from(ErrorKind::Other));
                 }
 
-                // Another testing condition where we just check that passive listeners work
-                // we have to create a function `handle_client_ftp_command`
-                if read == 5 {
-                    // In the future we also might have to put here the kind of passive listener we want
-                    self.new_passive_listener(poll, token)
-                        .map_err(|_| ErrorKind::InvalidData)?;
+                // Translate to Command enum
+                let possible_command = Command::try_from(&buff[..read]);
 
-                    println!("** New port on {}", self.port - 1);
-
-                    // Test data
-                    to_write.buffer.append(&mut get_test_html(
-                        format!("Connect to port: {}", self.port - 1).as_str(),
+                // Check error
+                if let Err(message) = possible_command {
+                    println!("user sent a bad command: {}", message);
+                    to_write.reset(create_response(
+                        Response::success_transfering_file(),
+                        message,
                     ));
-
+                    poll.registry()
+                        .reregister(stream, event.token(), Interest::WRITABLE)?;
                     return Ok(());
-                } else {
-                    to_write.buffer.append(&mut get_test_html("HI"));
                 }
-                poll.registry().deregister(stream)?;
-                poll.registry()
-                    .register(stream, event.token(), Interest::WRITABLE)?;
+
+                let command =
+                    possible_command.expect("command parse is not an error, this is safe");
+
+                match command {
+                    Command::List(path) => {
+                        poll.registry()
+                            .reregister(stream, event.token(), Interest::WRITABLE)?;
+                        to_write.reset("unimplemented command `LIST`".as_bytes().to_vec());
+                    }
+
+                    Command::Port(ip, port) => {
+                        // poll.registry()
+                        //     .reregister(stream, event.token(), Interest::WRITABLE)?;
+                        // to_write.reset("Connecting...".as_bytes().to_vec());
+                        let actions = self.action_list();
+                        let map_conn = self.connections.clone();
+                        let next_id = self.next_id();
+                        spawn(move || {
+                            if false {
+                                return Err(());
+                            }
+                            let connection =
+                                TcpStream::connect(format!("{}:{}", ip, port).parse().unwrap());
+                            let mut connections = map_conn.lock().unwrap();
+                            let command_connection =
+                                connections.get_mut(&token).expect("TODO handle this error");
+                            actions.lock().unwrap().push((
+                                token,
+                                command_connection.clone(),
+                                Interest::WRITABLE,
+                            ));
+                            println!("Connected successfully");
+                            let mut command_connection = command_connection.lock().unwrap();
+                            if let RequestType::CommandTransfer(_, to_write, t) =
+                                &mut command_connection.request_type
+                            {
+                                if connection.is_err() {
+                                    to_write.reset(create_response(
+                                        Response::bad_sequence_of_commands(),
+                                        "Bad sequence of commands.",
+                                    ));
+                                    waker.wake().unwrap();
+                                    return Ok(());
+                                }
+                                *t = Some(Token(next_id));
+                                to_write.reset(create_response(
+                                    Response::command_okay(),
+                                    "Command okay.",
+                                ));
+                                waker.wake().unwrap();
+                            } else {
+                                //  unreachable...
+                                unreachable!();
+                                // return Err(());
+                            }
+                            drop(command_connection);
+                            let connection = connection.unwrap();
+                            let request_ctx = Arc::new(Mutex::new(RequestContext::new(
+                                RequestType::FileTransferActive(
+                                    connection,
+                                    BufferToWrite::default(),
+                                    token,
+                                ),
+                            )));
+                            connections.insert(Token(next_id), request_ctx);
+                            Ok(())
+                        });
+                    }
+                }
+
+                // // Another testing condition where we just check that passive listeners work
+                // // we have to create a function `handle_client_ftp_command`
+                // if read == 5 {
+                //     // In the future we also might have to put here the kind of passive listener we want
+                //     self.new_passive_listener(poll, token)
+                //         .map_err(|_| ErrorKind::InvalidData)?;
+
+                //     println!("** New port on {}", self.port - 1);
+
+                //     // Test data
+                //     to_write.buffer.append(&mut get_test_html(
+                //         format!("Connect to port: {}", self.port - 1).as_str(),
+                //     ));
+
+                //     return Ok(());
+                // } else {
+                //     to_write.buffer.append(&mut get_test_html("HI"));
+                // }
+
                 Ok(())
             }
 
@@ -438,8 +555,8 @@ impl TCPImplementation for FTPServer {
     }
 
     fn close_connection(&mut self, poll: &Poll, token: Token) -> Result<(), Error> {
-        let map_conn = self.connections.clone();
-        let map_conn = map_conn.lock().unwrap();
+        let map_conn_arc = self.connections.clone();
+        let map_conn = map_conn_arc.lock().unwrap();
         let conn = {
             let connection = map_conn.get(&token);
             if connection.is_none() {
@@ -453,11 +570,29 @@ impl TCPImplementation for FTPServer {
         self.connections.lock().unwrap().remove(&token);
         match &mut conn.request_type {
             RequestType::FileTransferActive(stream, _, _)
-            | RequestType::FileTransferPassive(stream, _, _)
-            | RequestType::CommandTransfer(stream, _) => {
+            | RequestType::FileTransferPassive(stream, _, _) => {
                 poll.registry().deregister(stream)?;
                 stream.shutdown(Shutdown::Both)?;
                 println!("connection with the client was closed");
+            }
+            RequestType::CommandTransfer(stream, _, conn) => {
+                println!("connection with the client was closed");
+                // Ignore error to be honest, don't care if we try to close twice
+                let _ = poll.registry().deregister(stream);
+                let _ = stream.shutdown(Shutdown::Both);
+                let conn = conn.take();
+                if let Some(conn) = &conn {
+                    let mut map_conn = map_conn_arc.lock().unwrap();
+                    let connection = map_conn.get_mut(conn);
+                    if let Some(connection) = connection {
+                        println!("Disconnecting from dangling transfer connection");
+                        let mut connection = connection.lock().unwrap();
+                        // Don't care if we close twice
+                        let _ = self.deregister_and_shutdown(poll, &mut connection);
+                        drop(connection);
+                        map_conn.remove(conn);
+                    }
+                }
             }
             RequestType::PassiveModePort(stream, _) => {
                 // We actually just deregister when we write
@@ -466,5 +601,41 @@ impl TCPImplementation for FTPServer {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod ftp_server_testing {
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::TcpListener;
+    use std::net::TcpStream;
+    // use mio::net::{SocketAddr, TcpListener};
+
+    fn expect_response(stream: &mut TcpStream, response_expects: &str) {
+        let mut buff = [0; 1024];
+        let read = stream.read(&mut buff).expect("read didn't go well");
+        let str = std::str::from_utf8(&buff[0..read]).expect("error parsing response");
+        assert_eq!(response_expects, str);
+    }
+
+    #[test]
+    fn it_works() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        if let Err(err) = result {
+            panic!("{}", err);
+        }
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
+        stream
+            .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
+            .expect("writing everything");
+        let join = std::thread::spawn(move || {
+            let conn = srv.accept().expect("expect to receive connection");
+            drop(conn);
+        });
+        expect_response(&mut stream, "200 Command okay.\r\n");
+        join.join().unwrap();
     }
 }
