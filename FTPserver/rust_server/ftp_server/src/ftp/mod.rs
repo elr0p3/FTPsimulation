@@ -5,11 +5,12 @@ use std::{
 };
 
 mod command;
+mod handlers;
 mod response;
-
 use command::Command;
 use response::Response;
 
+// use handlers::write_buffer_file_transfer;
 use mio::net::{TcpListener, TcpStream};
 use mio::{event::Event, Interest, Poll, Token, Waker};
 use std::convert::TryFrom;
@@ -19,6 +20,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::spawn;
 
 use crate::tcp::TCPImplementation;
+
+use self::handlers::HandlerWrite;
 
 fn get_test_html(data: &str) -> Vec<u8> {
     return format!(
@@ -59,7 +62,8 @@ impl BufferToWrite {
     }
 }
 
-enum FileTransferType {
+#[derive(Debug)]
+pub enum FileTransferType {
     /// This kind of operation is when the server is saving a file from the client
     FileUpload(File),
 
@@ -80,12 +84,12 @@ pub enum RequestType {
 
     /// Also the token is for referencing the `CommandTransfer` req_ctx connection
     /// so we can send a command when the download is finished!
-    FileTransferPassive(TcpStream, BufferToWrite, Token),
+    FileTransferPassive(TcpStream, FileTransferType, Token),
 
     /// This requesst is a file transfer on active mode.    
     /// Also the token is for referencing the `CommandTransfer` req_ctx connection
     /// so we can send a command when the download is finished!
-    FileTransferActive(TcpStream, BufferToWrite, Token),
+    FileTransferActive(TcpStream, FileTransferType, Token),
 
     /// TcpStream of the connection
     /// BufferToWrite is the buffer that is gonna be written on Write mode
@@ -210,18 +214,6 @@ impl FTPServer {
         let mut actions_locked = actions.lock().unwrap();
         actions_locked.push(action);
     }
-
-    fn handle_file_transfer_passive(
-        action_list: ActionList,
-        waker: Arc<Waker>,
-        request_context: RequestContextMutex,
-    ) -> Result<(), Error> {
-        let mut request_ctx_mutex = request_context.lock().map_err(|_| ErrorKind::Other)?;
-        if let RequestType::FileTransferPassive(stream, internal, _token_request_commands) =
-            &mut request_ctx_mutex.request_type
-        {}
-        unimplemented!()
-    }
 }
 
 impl TCPImplementation for FTPServer {
@@ -277,102 +269,17 @@ impl TCPImplementation for FTPServer {
         let mut connection_mutex = connection.lock().unwrap();
         self.deregister(poll, &mut connection_mutex)?;
         drop(connection_mutex);
-        let actions_ref = self.action_list().clone();
+        let actions_ref = self.action_list();
         spawn(move || {
             let mut conn = connection.lock().unwrap();
-            match &mut conn.request_type {
-                RequestType::CommandTransfer(stream, to_write, _) => {
-                    let written = stream.write(&to_write.buffer[to_write.offset..]);
-                    if let Ok(written) = written {
-                        println!("writing! {}", written);
-                        if written + to_write.offset >= to_write.buffer.len() {
-                            to_write.buffer.clear();
-                            FTPServer::action_add(
-                                &actions_ref,
-                                (token, connection.clone(), Interest::READABLE),
-                            );
-                            waker.wake()?;
-                        } else {
-                            // Keep writing
-                            to_write.offset += written;
-                            FTPServer::action_add(
-                                &actions_ref,
-                                (token, connection.clone(), Interest::WRITABLE),
-                            );
-                            waker.wake()?;
-                        }
-                    } else if let Err(err) = written {
-                        if err.kind() == ErrorKind::WouldBlock {
-                            FTPServer::action_add(
-                                &actions_ref,
-                                (token, connection.clone(), Interest::WRITABLE),
-                            )
-                        } else {
-                            stream.shutdown(Shutdown::Both)?;
-                            println!("error writing because: {}", err);
-                        }
-                    }
-                    Ok(())
-                }
-
-                // NOTE: This will have custom behaviours in the future
-                // This is a demo of how it should behave, we should have lots of custom behaviours to be honest :|
-                RequestType::FileTransferPassive(stream, to_write, conn_tok) => {
-                    let written = stream.write(&to_write.buffer[to_write.offset..]);
-                    if let Ok(written) = written {
-                        println!("writing file transfer! {}", written);
-                        if written + to_write.offset >= to_write.buffer.len() {
-                            stream.shutdown(Shutdown::Both)?;
-                            let map_conn = map_conn_arc.lock().unwrap();
-                            let command_connection = map_conn.get(&conn_tok);
-                            if let Some(command_connection) = command_connection {
-                                let command_connection = command_connection.clone();
-                                let other_command_connection = command_connection.clone();
-                                let mut command_connection_mutex =
-                                    command_connection.lock().unwrap();
-                                if let RequestType::CommandTransfer(_, buffer_to_write, _) =
-                                    &mut command_connection_mutex.request_type
-                                {
-                                    println!("succesfully sending to the client!");
-                                    buffer_to_write.buffer = create_response(
-                                        Response::success_transfering_file(),
-                                        "Successfully transfered file...",
-                                    );
-                                    buffer_to_write.offset = 0;
-                                    FTPServer::action_add(
-                                        &actions_ref,
-                                        (*conn_tok, other_command_connection, Interest::WRITABLE),
-                                    );
-                                    waker.wake()?;
-                                } else {
-                                    println!("unexpected request type for command transfer");
-                                }
-                            } else {
-                                println!("not found connection...");
-                            }
-                            return Ok(());
-                        }
-                        to_write.offset += written;
-                        FTPServer::action_add(
-                            &actions_ref,
-                            (token, connection.clone(), Interest::WRITABLE),
-                        );
-                        waker.wake()?;
-                    } else if let Err(err) = written {
-                        if err.kind() == ErrorKind::WouldBlock {
-                            FTPServer::action_add(
-                                &actions_ref,
-                                (token, connection.clone(), Interest::WRITABLE),
-                            );
-                        } else {
-                            stream.shutdown(Shutdown::Both)?;
-                            let mut map_conn = map_conn_arc.lock().unwrap();
-                            map_conn.remove(&token);
-                        }
-                    }
-                    Ok(())
-                }
-                _ => Err(Error::from(ErrorKind::NotFound)),
+            let handler = HandlerWrite::new(
+                token,
+                map_conn_arc.clone(),
+                actions_ref.clone(),
+                connection.clone(),
+            );
+            if let Err(err) = handler.handle_write(&mut conn.request_type, &waker) {
+                println!("fatal error {}", err);
             }
         });
         Ok(())
@@ -418,7 +325,7 @@ impl TCPImplementation for FTPServer {
                 if let Err(message) = possible_command {
                     println!("user sent a bad command: {}", message);
                     to_write.reset(create_response(
-                        Response::success_transfering_file(),
+                        Response::bad_sequence_of_commands(),
                         message,
                     ));
                     poll.registry()
@@ -486,7 +393,7 @@ impl TCPImplementation for FTPServer {
                             let request_ctx = Arc::new(Mutex::new(RequestContext::new(
                                 RequestType::FileTransferActive(
                                     connection,
-                                    BufferToWrite::default(),
+                                    FileTransferType::Buffer(BufferToWrite::default()),
                                     token,
                                 ),
                             )));
@@ -536,7 +443,7 @@ impl TCPImplementation for FTPServer {
                     token_for_connection,
                     RequestType::FileTransferPassive(
                         stream,
-                        BufferToWrite::new(get_test_html("HELLO")),
+                        FileTransferType::Buffer(BufferToWrite::new(get_test_html("HELLO"))),
                         *command_conn_ref,
                     ),
                 );

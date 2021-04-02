@@ -59,11 +59,14 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
         match command[0] {
             // Possible commands = LIST
             b'L' => {
-                if command.len() <= 6 {
+                if command.len() <= 5 {
                     return Err("invalid command length");
                 }
                 if &command[1..4] != b"IST" {
                     return Err("Invalid command, maybe you meant: `LIST`?");
+                }
+                if command.len() == 6 {
+                    return Ok(Command::List(Path::new("/")));
                 }
                 expects_byte(
                     command[4],
@@ -141,6 +144,7 @@ mod test {
                 Command::List(Path::new("./test/test/test1.txt")),
                 true,
             ),
+            ("LIST\r\n".as_bytes(), Command::List(Path::new("/")), true),
             (
                 "PORT 0,0,0,0,0,20\r\n".as_bytes(),
                 Command::Port(Ipv4Addr::new(0, 0, 0, 0), 20),
