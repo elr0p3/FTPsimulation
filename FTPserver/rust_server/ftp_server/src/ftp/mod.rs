@@ -7,7 +7,7 @@ use std::{
 
 mod command;
 mod handler_read;
-mod handlers;
+mod handler_write;
 mod response;
 use command::Command;
 use response::Response;
@@ -25,7 +25,7 @@ use crate::tcp::TCPImplementation;
 
 use self::{
     handler_read::HandlerRead,
-    handlers::{close_connection_recursive, HandlerWrite},
+    handler_write::{close_connection_recursive, HandlerWrite},
 };
 
 fn get_test_html(data: &str) -> Vec<u8> {
