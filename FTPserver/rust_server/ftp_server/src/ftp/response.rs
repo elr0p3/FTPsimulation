@@ -33,6 +33,10 @@ impl Response {
         Response::new_from_enums(CodeFirst::Positive, CodeSecond::Syntax, 1)
     }
 
+    pub fn closing_data_connection() -> Response {
+        Response::new_from_enums(CodeFirst::Positive, CodeSecond::Connections, 6)
+    }
+
     pub fn command_okay() -> Response {
         Response::new_from_enums(CodeFirst::Positive, CodeSecond::Syntax, 0)
     }
@@ -42,6 +46,18 @@ impl Response {
             CodeFirst::PermanentNegativeCompletion,
             CodeSecond::Syntax,
             3,
+        )
+    }
+
+    pub fn file_status_okay() -> Response {
+        Response::new_from_enums(CodeFirst::PositivePreliminary, CodeSecond::FileSystem, 0)
+    }
+
+    pub fn cant_open_data_connection() -> Response {
+        Response::new_from_enums(
+            CodeFirst::TransientNegativeCompletion,
+            CodeSecond::FileSystem,
+            5,
         )
     }
 }

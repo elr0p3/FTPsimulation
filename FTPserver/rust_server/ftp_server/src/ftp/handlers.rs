@@ -1,5 +1,5 @@
 use super::{
-    create_response, ActionList, BufferToWrite, FTPServer, HashMutex, RequestContextMutex,
+    create_response, Action, ActionList, BufferToWrite, FTPServer, HashMutex, RequestContextMutex,
     RequestType, Token,
 };
 use super::{response::Response, FileTransferType};
@@ -50,7 +50,7 @@ pub struct HandlerWrite {
 
     connection_db: HashMutex<Token, RequestContextMutex>,
 
-    actions_reference: ActionList,
+    pub actions: Vec<Action>,
 
     connection: RequestContextMutex,
 }
@@ -59,23 +59,20 @@ impl HandlerWrite {
     pub fn new(
         connection_token: Token,
         connection_db: HashMutex<Token, RequestContextMutex>,
-        actions_reference: ActionList,
         connection: RequestContextMutex,
     ) -> Self {
         Self {
             connection_token,
             connection_db,
-            actions_reference,
+            actions: Vec::new(),
             connection,
         }
     }
 
     fn keep_interest(&mut self, waker: &Waker, interest: Interest) -> Result<(), Error> {
-        FTPServer::action_add(
-            &self.actions_reference,
-            (self.connection_token, self.connection.clone(), interest),
-        );
-        waker.wake()?;
+        self.actions
+            .push((self.connection_token, self.connection.clone(), interest));
+
         Ok(())
     }
 
@@ -87,7 +84,7 @@ impl HandlerWrite {
     }
 
     pub fn handle_write(
-        mut self,
+        &mut self,
         request_type: &mut RequestType,
         waker: &Waker,
     ) -> Result<(), Error> {
@@ -98,7 +95,11 @@ impl HandlerWrite {
                     println!("writing! {}", written);
                     if written + to_write.offset >= to_write.buffer.len() {
                         to_write.buffer.clear();
+                        to_write.offset = 0;
                         self.keep_interest(waker, Interest::READABLE)?;
+                        if let Some(callback) = to_write.callback_after_sending.take() {
+                            callback();
+                        }
                     } else {
                         // Keep writing
                         to_write.offset += written;
@@ -110,19 +111,24 @@ impl HandlerWrite {
                     } else {
                         self.close_connection(stream)?;
                         if let Some(t) = t {
-                            close_connection_recursive(self.connection_db, *t)?;
+                            close_connection_recursive(self.connection_db.clone(), *t)?;
                         }
                         println!("error writing because: {}", err);
                     }
                 }
-                Ok(())
             }
 
             RequestType::FileTransferPassive(stream, ftt, conn_tok) => {
-                self.handle_file_transfer(stream, ftt, waker, *conn_tok)
+                self.handle_file_transfer(stream, ftt, waker, *conn_tok)?;
             }
-            _ => Err(Error::from(ErrorKind::NotFound)),
+
+            RequestType::FileTransferActive(stream, ftt, conn_tok) => {
+                self.handle_file_transfer(stream, ftt, waker, *conn_tok)?;
+            }
+
+            _ => return Err(Error::from(ErrorKind::NotFound)),
         }
+        Ok(())
     }
 
     fn handle_file_transfer(
@@ -149,34 +155,32 @@ impl HandlerWrite {
     ) -> Result<(), Error> {
         let written = stream.write(&to_write.buffer[to_write.offset..]);
         if let Ok(written) = written {
-            println!("writing file transfer! {}", written);
+            println!("Writing file transfer! {}", written);
             if written + to_write.offset >= to_write.buffer.len() {
                 stream.shutdown(Shutdown::Both)?;
                 let map_conn = self.connection_db.lock().unwrap();
                 let command_connection = map_conn.get(&cmd_connection_token);
                 if let Some(command_connection) = command_connection {
                     let mut command_connection_mutex = command_connection.lock().unwrap();
-                    if let RequestType::CommandTransfer(_, buffer_to_write, _) =
+                    if let RequestType::CommandTransfer(_, buffer_to_write, t) =
                         &mut command_connection_mutex.request_type
                     {
-                        println!("succesfully sending to the client!");
+                        t.take();
+                        println!("Succesfully sending to the client!");
                         buffer_to_write.buffer = create_response(
-                            Response::success_transfering_file(),
-                            "Successfully transfered file...",
+                            Response::closing_data_connection(),
+                            "Closing data connection. Requested file action successful (for example, file transfer or file abort).",
                         );
                         buffer_to_write.offset = 0;
-                        FTPServer::action_add(
-                            &self.actions_reference,
-                            (
-                                cmd_connection_token,
-                                command_connection.clone(),
-                                Interest::WRITABLE,
-                            ),
-                        );
-                        waker.wake()?;
                     } else {
-                        println!("unexpected request type for command transfer");
+                        println!("Unexpected request type for command transfer");
                     }
+                    drop(command_connection_mutex);
+                    self.actions.push((
+                        cmd_connection_token,
+                        command_connection.clone(),
+                        Interest::WRITABLE,
+                    ));
                 } else {
                     println!("not found connection...");
                 }

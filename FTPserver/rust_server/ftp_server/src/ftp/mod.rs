@@ -37,17 +37,36 @@ fn create_response(response_code: Response, message: &str) -> Vec<u8> {
     format!("{} {}\r\n", response_code.0, message).into_bytes()
 }
 
-#[derive(Default, Debug, Clone)]
+/// Buffer that is really useful to set to a writable request_context
 pub struct BufferToWrite {
+    /// Total data that this buffer is gonna send
     buffer: Vec<u8>,
+
+    /// Current offset of the buffer
     offset: usize,
+
+    /// We are using this callback mainly to do an action just after sending a command
+    /// For example if we send a transition command 1XX, and make sure that just after that
+    /// we start a file transfer, we need to pass a threadsafe callback that will start that action
+    /// (For example starting a writable interest to the file transfer socket)
+    /// Make sure that you use `.take()` for emptying the option
+    callback_after_sending: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl BufferToWrite {
+    fn default() -> Self {
+        Self {
+            buffer: Vec::default(),
+            offset: 0,
+            callback_after_sending: None,
+        }
+    }
+
     fn new(vector: Vec<u8>) -> Self {
         Self {
             buffer: vector,
             offset: 0,
+            callback_after_sending: None,
         }
     }
 
@@ -62,7 +81,7 @@ impl BufferToWrite {
     }
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub enum FileTransferType {
     /// This kind of operation is when the server is saving a file from the client
     FileUpload(File),
@@ -78,7 +97,7 @@ pub enum FileTransferType {
 /// - storing user state (what do we need?)
 /// - storing file state in file transfer
 // TODO: Create user struct and all of that logic so we can keep a reference to a user in the request_context
-#[derive(Debug)]
+// #[derive(Debug)]
 pub enum RequestType {
     /// This requesst is a file transfer on passive mode.
 
@@ -211,8 +230,10 @@ impl FTPServer {
     }
 
     fn action_add(actions: &ActionList, action: Action) {
+        println!("adding an action...");
         let mut actions_locked = actions.lock().unwrap();
         actions_locked.push(action);
+        println!("added action");
     }
 }
 
@@ -272,15 +293,18 @@ impl TCPImplementation for FTPServer {
         let actions_ref = self.action_list();
         spawn(move || {
             let mut conn = connection.lock().unwrap();
-            let handler = HandlerWrite::new(
-                token,
-                map_conn_arc.clone(),
-                actions_ref.clone(),
-                connection.clone(),
-            );
+            let mut handler = HandlerWrite::new(token, map_conn_arc.clone(), connection.clone());
             if let Err(err) = handler.handle_write(&mut conn.request_type, &waker) {
                 println!("fatal error {}", err);
             }
+            drop(conn);
+            println!("Adding actions!");
+            let mut actions_locked = actions_ref.lock().unwrap();
+            for action in handler.actions {
+                actions_locked.push(action);
+                let _ = waker.wake();
+            }
+            println!("Finished adding actions!");
         });
         Ok(())
     }
@@ -303,7 +327,7 @@ impl TCPImplementation for FTPServer {
         drop(map_conn);
         let mut conn = conn.lock().unwrap();
         match &mut conn.request_type {
-            RequestType::CommandTransfer(stream, to_write, _) => {
+            RequestType::CommandTransfer(stream, to_write, data_connection) => {
                 // Initialize a big buffer
                 let mut buff = [0; 10024];
 
@@ -340,7 +364,47 @@ impl TCPImplementation for FTPServer {
                     Command::List(path) => {
                         poll.registry()
                             .reregister(stream, event.token(), Interest::WRITABLE)?;
-                        to_write.reset("unimplemented command `LIST`".as_bytes().to_vec());
+                        if let None = data_connection {
+                            to_write.reset(create_response(
+                                Response::bad_sequence_of_commands(),
+                                "Bad sequence of commands.",
+                            ));
+                            return Ok(());
+                        }
+                        to_write.reset(create_response(
+                            Response::file_status_okay(),
+                            "File status okay; about to open data connection.",
+                        ));
+                        let actions = self.action_list();
+                        let mut connections = self.connections.lock().unwrap();
+                        let data_connection = data_connection.unwrap();
+                        let connection = connections.get_mut(&data_connection);
+                        if let Some(connection) = connection {
+                            let connection = connection.clone();
+                            let f = move || {
+                                let mut connection_m = connection.lock().unwrap();
+                                match &mut connection_m.request_type {
+                                    RequestType::FileTransferActive(_, ftt, _) => {
+                                        *ftt = FileTransferType::Buffer(BufferToWrite::new(
+                                            vec![1].repeat(1000),
+                                        ));
+                                    }
+                                    _ => unimplemented!(),
+                                }
+                                actions.lock().unwrap().push((
+                                    data_connection,
+                                    connection.clone(),
+                                    Interest::WRITABLE,
+                                ));
+                                let _ = waker.wake();
+                            };
+                            to_write.callback_after_sending = Some(Box::new(f));
+                        } else {
+                            to_write.reset(create_response(
+                                Response::cant_open_data_connection(),
+                                "Can't open data connection.",
+                            ));
+                        }
                     }
 
                     Command::Port(ip, port) => {
@@ -457,7 +521,7 @@ impl TCPImplementation for FTPServer {
                 Ok(())
             }
 
-            _ => unimplemented!("Unimplemented Request type: {:?}", conn.request_type),
+            _ => unimplemented!("Unimplemented Request type"),
         }
     }
 
@@ -483,7 +547,7 @@ impl TCPImplementation for FTPServer {
                 println!("connection with the client was closed");
             }
             RequestType::CommandTransfer(stream, _, conn) => {
-                println!("connection with the client was closed");
+                println!("Connection with the client (COMMAND) is closed");
                 // Ignore error to be honest, don't care if we try to close twice
                 let _ = poll.registry().deregister(stream);
                 let _ = stream.shutdown(Shutdown::Both);
@@ -528,21 +592,36 @@ mod ftp_server_testing {
 
     #[test]
     fn it_works() {
-        let result = TcpStream::connect("127.0.0.1:8080");
-        if let Err(err) = result {
-            panic!("{}", err);
+        for i in 0..100 {
+            let result = TcpStream::connect("127.0.0.1:8080");
+            if let Err(err) = result {
+                panic!("{}", err);
+            }
+            let mut stream = result.unwrap();
+            expect_response(&mut stream, "220 Service ready for new user.\r\n");
+            let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
+            stream
+                .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
+                .expect("writing everything");
+            let join = std::thread::spawn(move || {
+                let (mut conn, _) = srv.accept().expect("expect to receive connection");
+                let mut buff = [0; 1024];
+                let read = conn.read(&mut buff).expect("to have read");
+                assert_eq!(read, 1000);
+                assert_eq!(buff[0], 1);
+                let possible_err = conn.read(&mut buff);
+                assert!(possible_err.unwrap() == 0);
+            });
+            expect_response(&mut stream, "200 Command okay.\r\n");
+            stream
+                .write_all(&"LIST\r\n".as_bytes())
+                .expect("writing everything");
+            expect_response(
+                &mut stream,
+                "150 File status okay; about to open data connection.\r\n",
+            );
+            expect_response(&mut stream, "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n");
+            join.join().unwrap();
         }
-        let mut stream = result.unwrap();
-        expect_response(&mut stream, "220 Service ready for new user.\r\n");
-        let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
-        stream
-            .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
-            .expect("writing everything");
-        let join = std::thread::spawn(move || {
-            let conn = srv.accept().expect("expect to receive connection");
-            drop(conn);
-        });
-        expect_response(&mut stream, "200 Command okay.\r\n");
-        join.join().unwrap();
     }
 }
