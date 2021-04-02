@@ -24,10 +24,11 @@ pub fn close_connection_recursive(
     drop(map_conn);
     let mut conn = conn.lock().unwrap();
     connection_database.lock().unwrap().remove(&to_delete);
+    println!("[CLOSED CONNECTION]");
     match &mut conn.request_type {
         RequestType::FileTransferActive(stream, _, _)
         | RequestType::FileTransferPassive(stream, _, _) => {
-            stream.shutdown(Shutdown::Both)?;
+            let _ = stream.shutdown(Shutdown::Both)?;
             println!("connection with the client was closed");
         }
         RequestType::CommandTransfer(stream, _, conn) => {
@@ -157,8 +158,10 @@ impl HandlerWrite {
         if let Ok(written) = written {
             println!("Writing file transfer! {}", written);
             if written + to_write.offset >= to_write.buffer.len() {
+                println!("Closing write connection...");
                 stream.shutdown(Shutdown::Both)?;
-                let map_conn = self.connection_db.lock().unwrap();
+                let mut map_conn = self.connection_db.lock().unwrap();
+                assert!(map_conn.remove(&self.connection_token).is_some());
                 let command_connection = map_conn.get(&cmd_connection_token);
                 if let Some(command_connection) = command_connection {
                     let mut command_connection_mutex = command_connection.lock().unwrap();

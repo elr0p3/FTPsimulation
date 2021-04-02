@@ -1,10 +1,12 @@
 use std::{
     collections::HashMap,
-    fs::File,
+    fs::{self, File},
     io::{Read, Write},
+    path::Path,
 };
 
 mod command;
+mod handler_read;
 mod handlers;
 mod response;
 use command::Command;
@@ -21,7 +23,10 @@ use std::thread::spawn;
 
 use crate::tcp::TCPImplementation;
 
-use self::handlers::HandlerWrite;
+use self::{
+    handler_read::HandlerRead,
+    handlers::{close_connection_recursive, HandlerWrite},
+};
 
 fn get_test_html(data: &str) -> Vec<u8> {
     return format!(
@@ -147,8 +152,13 @@ pub struct FTPServer {
     port: usize,
 }
 
+pub const ROOT: &'static str = "./root";
+
 impl FTPServer {
     pub fn new() -> Self {
+        if !Path::new(ROOT).exists() {
+            fs::create_dir(ROOT).expect("root dir hasn't been created");
+        }
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
             current_id: 0,
@@ -325,204 +335,39 @@ impl TCPImplementation for FTPServer {
         };
         let token = event.token();
         drop(map_conn);
-        let mut conn = conn.lock().unwrap();
-        match &mut conn.request_type {
-            RequestType::CommandTransfer(stream, to_write, data_connection) => {
-                // Initialize a big buffer
-                let mut buff = [0; 10024];
-
-                // Read thing into the buffer TODO Handle block in multithread
-                let read = stream.read(&mut buff)?;
-
-                println!("Read buffer: {}", read);
-
-                // Testing condition
-                if read >= buff.len() {
-                    // Just close connection if the request is too big at the moment
-                    return Err(Error::from(ErrorKind::Other));
-                }
-
-                // Translate to Command enum
-                let possible_command = Command::try_from(&buff[..read]);
-
-                // Check error
-                if let Err(message) = possible_command {
-                    println!("user sent a bad command: {}", message);
-                    to_write.reset(create_response(
-                        Response::bad_sequence_of_commands(),
-                        message,
-                    ));
-                    poll.registry()
-                        .reregister(stream, event.token(), Interest::WRITABLE)?;
-                    return Ok(());
-                }
-
-                let command =
-                    possible_command.expect("command parse is not an error, this is safe");
-
-                match command {
-                    Command::List(path) => {
-                        poll.registry()
-                            .reregister(stream, event.token(), Interest::WRITABLE)?;
-                        if let None = data_connection {
-                            to_write.reset(create_response(
-                                Response::bad_sequence_of_commands(),
-                                "Bad sequence of commands.",
-                            ));
-                            return Ok(());
-                        }
-                        to_write.reset(create_response(
-                            Response::file_status_okay(),
-                            "File status okay; about to open data connection.",
-                        ));
-                        let actions = self.action_list();
-                        let mut connections = self.connections.lock().unwrap();
-                        let data_connection = data_connection.unwrap();
-                        let connection = connections.get_mut(&data_connection);
-                        if let Some(connection) = connection {
-                            let connection = connection.clone();
-                            let f = move || {
-                                let mut connection_m = connection.lock().unwrap();
-                                match &mut connection_m.request_type {
-                                    RequestType::FileTransferActive(_, ftt, _) => {
-                                        *ftt = FileTransferType::Buffer(BufferToWrite::new(
-                                            vec![1].repeat(1000),
-                                        ));
-                                    }
-                                    _ => unimplemented!(),
-                                }
-                                actions.lock().unwrap().push((
-                                    data_connection,
-                                    connection.clone(),
-                                    Interest::WRITABLE,
-                                ));
-                                let _ = waker.wake();
-                            };
-                            to_write.callback_after_sending = Some(Box::new(f));
-                        } else {
-                            to_write.reset(create_response(
-                                Response::cant_open_data_connection(),
-                                "Can't open data connection.",
-                            ));
-                        }
-                    }
-
-                    Command::Port(ip, port) => {
-                        // poll.registry()
-                        //     .reregister(stream, event.token(), Interest::WRITABLE)?;
-                        // to_write.reset("Connecting...".as_bytes().to_vec());
-                        let actions = self.action_list();
-                        let map_conn = self.connections.clone();
-                        let next_id = self.next_id();
-                        spawn(move || {
-                            if false {
-                                return Err(());
-                            }
-                            let connection =
-                                TcpStream::connect(format!("{}:{}", ip, port).parse().unwrap());
-                            let mut connections = map_conn.lock().unwrap();
-                            let command_connection =
-                                connections.get_mut(&token).expect("TODO handle this error");
-                            actions.lock().unwrap().push((
-                                token,
-                                command_connection.clone(),
-                                Interest::WRITABLE,
-                            ));
-                            println!("Connected successfully");
-                            let mut command_connection = command_connection.lock().unwrap();
-                            if let RequestType::CommandTransfer(_, to_write, t) =
-                                &mut command_connection.request_type
-                            {
-                                if connection.is_err() {
-                                    to_write.reset(create_response(
-                                        Response::bad_sequence_of_commands(),
-                                        "Bad sequence of commands.",
-                                    ));
-                                    waker.wake().unwrap();
-                                    return Ok(());
-                                }
-                                *t = Some(Token(next_id));
-                                to_write.reset(create_response(
-                                    Response::command_okay(),
-                                    "Command okay.",
-                                ));
-                                waker.wake().unwrap();
-                            } else {
-                                //  unreachable...
-                                unreachable!();
-                                // return Err(());
-                            }
-                            drop(command_connection);
-                            let connection = connection.unwrap();
-                            let request_ctx = Arc::new(Mutex::new(RequestContext::new(
-                                RequestType::FileTransferActive(
-                                    connection,
-                                    FileTransferType::Buffer(BufferToWrite::default()),
-                                    token,
-                                ),
-                            )));
-                            connections.insert(Token(next_id), request_ctx);
-                            Ok(())
-                        });
-                    }
-                }
-
-                // // Another testing condition where we just check that passive listeners work
-                // // we have to create a function `handle_client_ftp_command`
-                // if read == 5 {
-                //     // In the future we also might have to put here the kind of passive listener we want
-                //     self.new_passive_listener(poll, token)
-                //         .map_err(|_| ErrorKind::InvalidData)?;
-
-                //     println!("** New port on {}", self.port - 1);
-
-                //     // Test data
-                //     to_write.buffer.append(&mut get_test_html(
-                //         format!("Connect to port: {}", self.port - 1).as_str(),
-                //     ));
-
-                //     return Ok(());
-                // } else {
-                //     to_write.buffer.append(&mut get_test_html("HI"));
-                // }
-
-                Ok(())
-            }
-
-            RequestType::PassiveModePort(listener, command_conn_ref) => {
-                // Accept file connection
-                let (mut stream, _addr) = listener.accept()?;
-
-                // Get the token for the connection
-                let token_for_connection = Token(self.next_id());
-
-                // Register the connection as writable/readable
-                // TODO Note that we need to put in passivemodeport the field of which kind of connection is this
-                // (Download, Upload, Just Buffer Transfer...)
-                poll.registry()
-                    .register(&mut stream, token_for_connection, Interest::WRITABLE)?;
-
-                // Add the connection
-                self.add_connection(
-                    token_for_connection,
-                    RequestType::FileTransferPassive(
-                        stream,
-                        FileTransferType::Buffer(BufferToWrite::new(get_test_html("HELLO"))),
-                        *command_conn_ref,
-                    ),
+        let mut handler_read = HandlerRead::new(token, self.connections.clone(), conn.clone());
+        let actions = self.action_list();
+        let next_id = self.next_id();
+        spawn(move || {
+            let connection_arc = conn.clone();
+            let mut connection_mutex = connection_arc.lock().unwrap();
+            let response = handler_read.handle_read(
+                &mut connection_mutex.request_type,
+                &waker,
+                actions.clone(),
+                next_id,
+            );
+            // If it's a definitive error
+            let is_err = response.is_err() && response.unwrap_err().kind() != ErrorKind::WouldBlock;
+            if is_err {
+                println!("Closing read because of an error...");
+                let _ = close_connection_recursive(
+                    handler_read.connection_db.clone(),
+                    handler_read.connection_token,
                 );
-
-                // Remove the listener (won't accept more connections)
-                self.connections.lock().unwrap().remove(&event.token());
-
-                // Just deregister
-                poll.registry().deregister(listener)?;
-
-                Ok(())
+                let _ = waker.wake();
+            } else {
+                drop(connection_mutex);
+                let mut actions = actions.lock().unwrap();
+                for action in handler_read.actions {
+                    println!("pushing action...");
+                    actions.push(action);
+                    let _ = waker.wake();
+                }
             }
-
-            _ => unimplemented!("Unimplemented Request type"),
-        }
+            println!("Finished doing read of request_context");
+        });
+        Ok(())
     }
 
     fn close_connection(&mut self, poll: &Poll, token: Token) -> Result<(), Error> {

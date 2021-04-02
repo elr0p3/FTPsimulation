@@ -1,0 +1,237 @@
+   /*
+        match &mut conn.request_type {
+            RequestType::CommandTransfer(stream, to_write, data_connection) => {
+                // Initialize a big buffer
+                let mut buff = [0; 10024];
+
+                // Read thing into the buffer TODO Handle block in multithread
+                let read = stream.read(&mut buff)?;
+
+                println!("Read buffer: {}", read);
+
+                // Testing condition
+                if read >= buff.len() {
+                    // Just close connection if the request is too big at the moment
+                    return Err(Error::from(ErrorKind::Other));
+                }
+
+                // Translate to Command enum
+                let possible_command = Command::try_from(&buff[..read]);
+
+                // Check error
+                if let Err(message) = possible_command {
+                    println!("user sent a bad command: {}", message);
+                    to_write.reset(create_response(
+                        Response::bad_sequence_of_commands(),
+                        message,
+                    ));
+                    poll.registry()
+                        .reregister(stream, event.token(), Interest::WRITABLE)?;
+                    return Ok(());
+                }
+
+                let command =
+                    possible_command.expect("command parse is not an error, this is safe");
+
+                match command {
+                    Command::Retrv(path) => {
+                        poll.registry()
+                            .reregister(stream, event.token(), Interest::WRITABLE)?;
+                        if let None = data_connection {
+                            to_write.reset(create_response(
+                                Response::bad_sequence_of_commands(),
+                                "Bad sequence of commands.",
+                            ));
+                            return Ok(());
+                        }
+                        // Example of parsing the path, later on we will need to build
+                        // from here
+                        let base = format!("{}/{}", ROOT, "username");
+                        let root_path = Path::new(base.as_str());
+                        let total_path = root_path.join(path).canonicalize();
+                        if let Ok(path) = total_path {
+                            if !path.starts_with(base) {
+                                to_write.reset(create_response(
+                                    Response::file_unavailable(),
+                                    "Requested action not taken. File unavailable, no access.",
+                                ));
+                                return Ok(());
+                            }
+                            let file = File::open(path);
+                            if let Err(_) = file {
+                                to_write.reset(create_response(
+                                    Response::file_unavailable(),
+                                    "Requested action not taken. File unavailable, file not found.",
+                                ));
+                                return Ok(());
+                            }
+                            let file = file.unwrap();
+                        } else {
+                            to_write.reset(create_response(
+                                Response::file_unavailable(),
+                                "Requested action not taken. File unavailable, file not found.",
+                            ));
+                            return Ok(());
+                        }
+                    }
+
+                    Command::List(path) => {
+                        poll.registry()
+                            .reregister(stream, event.token(), Interest::WRITABLE)?;
+                        if let None = data_connection {
+                            to_write.reset(create_response(
+                                Response::bad_sequence_of_commands(),
+                                "Bad sequence of commands.",
+                            ));
+                            return Ok(());
+                        }
+                        to_write.reset(create_response(
+                            Response::file_status_okay(),
+                            "File status okay; about to open data connection.",
+                        ));
+                        let actions = self.action_list();
+                        let mut connections = self.connections.lock().unwrap();
+                        let data_connection = data_connection.unwrap();
+                        let connection = connections.get_mut(&data_connection);
+                        if let Some(connection) = connection {
+                            let connection = connection.clone();
+                            let f = move || {
+                                let mut connection_m = connection.lock().unwrap();
+                                match &mut connection_m.request_type {
+                                    RequestType::FileTransferActive(_, ftt, _) => {
+                                        *ftt = FileTransferType::Buffer(BufferToWrite::new(
+                                            vec![1].repeat(1000),
+                                        ));
+                                    }
+                                    _ => unimplemented!(),
+                                }
+                                actions.lock().unwrap().push((
+                                    data_connection,
+                                    connection.clone(),
+                                    Interest::WRITABLE,
+                                ));
+                                let _ = waker.wake();
+                            };
+                            to_write.callback_after_sending = Some(Box::new(f));
+                        } else {
+                            to_write.reset(create_response(
+                                Response::cant_open_data_connection(),
+                                "Can't open data connection.",
+                            ));
+                        }
+                    }
+
+                    Command::Port(ip, port) => {
+                        let actions = self.action_list();
+                        let map_conn = self.connections.clone();
+                        let next_id = self.next_id();
+                        spawn(move || {
+                            if false {
+                                return Err(());
+                            }
+                            let connection =
+                                TcpStream::connect(format!("{}:{}", ip, port).parse().unwrap());
+                            let mut connections = map_conn.lock().unwrap();
+                            let command_connection =
+                                connections.get_mut(&token).expect("TODO handle this error");
+                            actions.lock().unwrap().push((
+                                token,
+                                command_connection.clone(),
+                                Interest::WRITABLE,
+                            ));
+                            println!("Connected successfully");
+                            let mut command_connection = command_connection.lock().unwrap();
+                            if let RequestType::CommandTransfer(_, to_write, t) =
+                                &mut command_connection.request_type
+                            {
+                                if connection.is_err() {
+                                    to_write.reset(create_response(
+                                        Response::bad_sequence_of_commands(),
+                                        "Bad sequence of commands.",
+                                    ));
+                                    waker.wake().unwrap();
+                                    return Ok(());
+                                }
+                                *t = Some(Token(next_id));
+                                to_write.reset(create_response(
+                                    Response::command_okay(),
+                                    "Command okay.",
+                                ));
+                                waker.wake().unwrap();
+                            } else {
+                                //  unreachable...
+                                unreachable!();
+                                // return Err(());
+                            }
+                            drop(command_connection);
+                            let connection = connection.unwrap();
+                            let request_ctx = Arc::new(Mutex::new(RequestContext::new(
+                                RequestType::FileTransferActive(
+                                    connection,
+                                    FileTransferType::Buffer(BufferToWrite::default()),
+                                    token,
+                                ),
+                            )));
+                            connections.insert(Token(next_id), request_ctx);
+                            Ok(())
+                        });
+                    }
+                }
+
+                // // Another testing condition where we just check that passive listeners work
+                // // we have to create a function `handle_client_ftp_command`
+                // if read == 5 {
+                //     // In the future we also might have to put here the kind of passive listener we want
+                //     self.new_passive_listener(poll, token)
+                //         .map_err(|_| ErrorKind::InvalidData)?;
+
+                //     println!("** New port on {}", self.port - 1);
+
+                //     // Test data
+                //     to_write.buffer.append(&mut get_test_html(
+                //         format!("Connect to port: {}", self.port - 1).as_str(),
+                //     ));
+
+                //     return Ok(());
+                // } else {
+                //     to_write.buffer.append(&mut get_test_html("HI"));
+                // }
+
+                Ok(())
+            }
+
+            RequestType::PassiveModePort(listener, command_conn_ref) => {
+                // Accept file connection
+                let (mut stream, _addr) = listener.accept()?;
+
+                // Get the token for the connection
+                let token_for_connection = Token(self.next_id());
+
+                // Register the connection as writable/readable
+                // TODO Note that we need to put in passivemodeport the field of which kind of connection is this
+                // (Download, Upload, Just Buffer Transfer...)
+                poll.registry()
+                    .register(&mut stream, token_for_connection, Interest::WRITABLE)?;
+
+                // Add the connection
+                self.add_connection(
+                    token_for_connection,
+                    RequestType::FileTransferPassive(
+                        stream,
+                        FileTransferType::Buffer(BufferToWrite::new(get_test_html("HELLO"))),
+                        *command_conn_ref,
+                    ),
+                );
+
+                // Remove the listener (won't accept more connections)
+                self.connections.lock().unwrap().remove(&event.token());
+
+                // Just deregister
+                poll.registry().deregister(listener)?;
+
+                Ok(())
+            }
+
+            _ => unimplemented!("Unimplemented Request type"),
+        }
+         */

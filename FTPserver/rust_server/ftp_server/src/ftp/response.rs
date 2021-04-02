@@ -49,6 +49,22 @@ impl Response {
         )
     }
 
+    pub fn file_unavailable() -> Response {
+        Response::new_from_enums(
+            CodeFirst::PermanentNegativeCompletion,
+            CodeSecond::FileSystem,
+            0,
+        )
+    }
+
+    pub fn file_busy() -> Response {
+        Response::new_from_enums(
+            CodeFirst::TransientNegativeCompletion,
+            CodeSecond::FileSystem,
+            0,
+        )
+    }
+
     pub fn file_status_okay() -> Response {
         Response::new_from_enums(CodeFirst::PositivePreliminary, CodeSecond::FileSystem, 0)
     }

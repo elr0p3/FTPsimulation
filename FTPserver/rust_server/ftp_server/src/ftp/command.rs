@@ -9,8 +9,11 @@ pub enum Command<'a> {
 
     /// Pointer to string, which indicates the desired folder path
     /// ## Cases
-    /// * '/' | './' | None -> CurrentFolder
+    /// * './' | None -> ./
     List(&'a Path),
+
+    /// Pointer to string, which indicates the desired folder path
+    Retr(&'a Path),
 }
 
 fn expects_byte(byte: u8, expected_byte: u8, msg: &'static str) -> Result<(), &'static str> {
@@ -66,7 +69,7 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
                     return Err("Invalid command, maybe you meant: `LIST`?");
                 }
                 if command.len() == 6 {
-                    return Ok(Command::List(Path::new("/")));
+                    return Ok(Command::List(Path::new("./")));
                 }
                 expects_byte(
                     command[4],
@@ -78,6 +81,25 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
                     .map_err(|_| "expected utf8 string")?;
                 let path = Path::new(path_str);
                 Ok(Command::List(path))
+            }
+
+            b'R' => {
+                if command.len() <= 6 {
+                    return Err("invalid command length");
+                }
+                if &command[1..4] != b"ETR" {
+                    return Err("Invalid command, maybe you meant: `RETR`?");
+                }
+                expects_byte(
+                    command[4],
+                    b' ',
+                    "`RETR` Expected space in between command and the rest.",
+                )?;
+                // -2 because we wanna skip \r\n
+                let path_str = std::str::from_utf8(&command[5..command.len() - 2])
+                    .map_err(|_| "expected utf8 string")?;
+                let path = Path::new(path_str);
+                Ok(Command::Retr(path))
             }
 
             b'P' => {
@@ -144,7 +166,12 @@ mod test {
                 Command::List(Path::new("./test/test/test1.txt")),
                 true,
             ),
-            ("LIST\r\n".as_bytes(), Command::List(Path::new("/")), true),
+            (
+                "RETR ./test/test/test1.txt\r\n".as_bytes(),
+                Command::Retr(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            ("LIST\r\n".as_bytes(), Command::List(Path::new("./")), true),
             (
                 "PORT 0,0,0,0,0,20\r\n".as_bytes(),
                 Command::Port(Ipv4Addr::new(0, 0, 0, 0), 20),
@@ -168,7 +195,13 @@ mod test {
                 panic!(msg);
             }
             let command = command_try.unwrap();
-            assert_eq!(&command == expected_path, *should_be_equal);
+            assert_eq!(
+                &command == expected_path,
+                *should_be_equal,
+                "{:?} != {:?}",
+                command,
+                expected_path
+            );
         }
     }
 }
