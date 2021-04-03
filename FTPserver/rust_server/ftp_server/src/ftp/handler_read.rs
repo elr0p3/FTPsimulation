@@ -46,6 +46,22 @@ impl HandlerRead {
         }
     }
 
+    fn handle_file_transfer_download(
+        &mut self,
+        ctx: &mut RequestContext,
+        file: File,
+    ) -> Result<(), Error> {
+        match &mut ctx.request_type {
+            RequestType::CommandTransfer(_, _, _) => Err(Error::from(ErrorKind::NotFound)),
+            RequestType::FileTransferPassive(_stream, ftt, _)
+            | RequestType::FileTransferActive(_stream, ftt, _) => {
+                *ftt = FileTransferType::FileDownload(file);
+                Ok(())
+            }
+            RequestType::PassiveModePort(_, _) => Err(Error::from(ErrorKind::NotFound)),
+        }
+    }
+
     /// This function handles the read of the `request_type`,
     /// Will use `actions` for cloning its `Arc`, not for adquiring it
     /// `next_id` is assumed to be used, so the caller should provide always the next id
@@ -111,10 +127,12 @@ impl HandlerRead {
                         // Example of parsing the path, later on we will need to build
                         // from here
                         let base = format!("{}/{}", ROOT, "username");
-                        let root_path = Path::new(base.as_str());
+                        let root_path = Path::new(base.as_str()).canonicalize().unwrap();
+                        let true_base = root_path.to_str().unwrap();
                         let total_path = root_path.join(path).canonicalize();
                         if let Ok(path) = total_path {
-                            if !path.starts_with(base) {
+                            // println!("{:?}", path);
+                            if !path.starts_with(true_base) {
                                 to_write.reset(create_response(
                                     Response::file_unavailable(),
                                     "Requested action not taken. File unavailable, no access.",
@@ -129,7 +147,43 @@ impl HandlerRead {
                                 ));
                                 return Ok(());
                             }
-                            let _file = file.unwrap();
+                            let file = file.unwrap();
+                            let mut connection_db = self.connection_db.lock().unwrap();
+                            let token_data_conn = data_connection.take().unwrap();
+                            let data_transfer_conn = connection_db.get_mut(&token_data_conn);
+                            if data_transfer_conn.is_none() {
+                                to_write.reset(create_response(
+                                    Response::file_unavailable(),
+                                    "Requested action not taken. File unavailable, no access.",
+                                ));
+                                return Ok(());
+                            }
+                            let data_transfer_conn = data_transfer_conn.unwrap().clone();
+                            // Drop mutex because we are gonna do more stuff
+                            drop(connection_db);
+                            let mut data_transfer_conn_mutex = data_transfer_conn.lock().unwrap();
+                            if let Err(_) = self
+                                .handle_file_transfer_download(&mut data_transfer_conn_mutex, file)
+                            {
+                                to_write.reset(create_response(
+                                    Response::file_unavailable(),
+                                    "Requested action not taken. File unavailable, file not found.",
+                                ));
+                            } else {
+                                to_write.reset(create_response(
+                                    Response::file_status_okay(),
+                                    "File download starts!",
+                                ));
+                                let ctx = data_transfer_conn.clone();
+                                let cb = move || {
+                                    actions.lock().unwrap().push((
+                                        token_data_conn,
+                                        ctx,
+                                        Interest::WRITABLE,
+                                    ))
+                                };
+                                to_write.callback_after_sending = Some(Box::new(cb));
+                            }
                         } else {
                             to_write.reset(create_response(
                                 Response::file_unavailable(),

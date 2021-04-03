@@ -467,6 +467,26 @@ mod ftp_server_testing {
             );
             expect_response(&mut stream, "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n");
             join.join().unwrap();
+            let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
+            stream
+                .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
+                .expect("writing everything");
+            let join = std::thread::spawn(move || {
+                let (mut conn, _) = srv.accept().expect("expect to receive connection");
+                let mut buff = [0; 1024];
+                let read = conn.read(&mut buff).expect("to have read");
+                let expected = "Hello world!";
+                assert_eq!(read, expected.len());
+                assert_eq!(std::str::from_utf8(&buff[..read]).unwrap(), expected);
+                let possible_err = conn.read(&mut buff);
+                assert!(possible_err.unwrap() == 0);
+            });
+            expect_response(&mut stream, "200 Command okay.\r\n");
+            stream
+                .write_all(&"RETR ./testfile.txt\r\n".as_bytes())
+                .expect("writing everything");
+            expect_response(&mut stream, "150 File download starts!\r\n");
+            join.join().unwrap();
         }
     }
 }

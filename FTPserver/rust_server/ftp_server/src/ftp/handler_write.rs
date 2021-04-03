@@ -143,6 +143,35 @@ impl HandlerWrite {
             FileTransferType::Buffer(to_write) => {
                 self.write_buffer_file_transfer(stream, to_write, waker, cmd_connection_token)
             }
+
+            // TODO Handle chunks!!!!!!
+            FileTransferType::FileDownload(file) => {
+                // TODO Handle errors
+                let _ = std::io::copy(file, stream);
+                let _ = self.close_connection(stream);
+                let mut db = self.connection_db.lock().unwrap();
+                let cmd = db.get_mut(&cmd_connection_token);
+                if let Some(cmd) = cmd {
+                    let cmd_arc = cmd.clone();
+                    let mut cmd = cmd_arc.lock().unwrap();
+                    if let RequestType::CommandTransfer(_stream, to_write, t) =
+                        &mut cmd.request_type
+                    {
+                        t.take();
+                        to_write.reset(create_response(
+                            Response::closing_data_connection(),
+                            "Closing data connection. Requested file action successful. (file transfer)",
+                        ));
+                        self.actions.push((
+                            cmd_connection_token,
+                            cmd_arc.clone(),
+                            Interest::WRITABLE,
+                        ));
+                    }
+                }
+                Ok(())
+            }
+
             _ => unimplemented!(),
         }
     }
