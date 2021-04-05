@@ -22,8 +22,8 @@ pub fn close_connection_recursive(
         arc
     };
     drop(map_conn);
-    let mut conn = conn.lock().unwrap();
     connection_database.lock().unwrap().remove(&to_delete);
+    let mut conn = conn.lock().unwrap();
     println!("[CLOSE_CONNECTION_RECURSIVE] Closing connection recursively");
     match &mut conn.request_type {
         RequestType::FileTransferActive(stream, _, _)
@@ -103,7 +103,6 @@ impl HandlerWrite {
                         to_write.buffer.clear();
                         to_write.offset = 0;
                         self.keep_interest(waker, Interest::READABLE)?;
-                        // THIS
                         if let Some(callback) = to_write.callback_after_sending.take() {
                             callback();
                         }

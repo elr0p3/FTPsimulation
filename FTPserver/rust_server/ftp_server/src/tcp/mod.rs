@@ -143,14 +143,22 @@ pub fn create_server<T: AsRef<str>>(
                 SERVER => {
                     // If this is an event for the server, it means a connection
                     // is ready to be accepted.
-                    let (stream, _addr) = server.accept()?;
-
-                    if let Err(err) =
-                        tcp_implementation.new_connection(SERVER, Token(id), &poll, stream)
-                    {
-                        tcp_implementation.close_connection(&poll, Token(id))?;
+                    loop {
+                        match server.accept() {
+                            Ok((stream, _addr)) => {
+                                if let Err(err) = tcp_implementation.new_connection(
+                                    SERVER,
+                                    Token(id),
+                                    &poll,
+                                    stream,
+                                ) {
+                                    tcp_implementation.close_connection(&poll, Token(id))?;
+                                }
+                                id = tcp_implementation.next_id();
+                            }
+                            _ => break,
+                        }
                     }
-                    id = tcp_implementation.next_id();
                 }
                 THREAD => {
                     continue;

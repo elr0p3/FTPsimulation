@@ -86,6 +86,10 @@ impl HandlerRead {
                     self.connection_token.0, read
                 );
 
+                if !buff[0..read].contains(&b'\n') {
+                    panic!("NOT INCLUDED JL");
+                }
+
                 // Testing condition
                 if read >= buff.len() {
                     // Just close connection if the request is too big at the moment
