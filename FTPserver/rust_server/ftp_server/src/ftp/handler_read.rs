@@ -4,7 +4,7 @@ use super::{
     RequestContextMutex, RequestType, Token, ROOT,
 };
 use mio::{net::TcpStream, Interest, Waker};
-use std::io::Error;
+use std::io::{Error, Write};
 use std::{
     convert::TryFrom,
     path::Path,
@@ -74,13 +74,17 @@ impl HandlerRead {
     ) -> Result<(), Error> {
         match request_type {
             RequestType::CommandTransfer(stream, to_write, data_connection) => {
+                let _ = stream.flush();
                 // Initialize a big buffer
                 let mut buff = [0; 10024];
 
                 // Read thing into the buffer TODO Handle block in multithread
                 let read = stream.read(&mut buff)?;
 
-                println!("Read buffer: {}", read);
+                println!(
+                    "[HANDLE_READ] {} - {} bytes read",
+                    self.connection_token.0, read
+                );
 
                 // Testing condition
                 if read >= buff.len() {
@@ -93,7 +97,10 @@ impl HandlerRead {
 
                 // Check if it's a valid command
                 if let Err(message) = possible_command {
-                    println!("User sent a bad command: {}", message);
+                    println!(
+                        "[HANDLE_READ] {} - User sent a bad command {}",
+                        self.connection_token.0, message
+                    );
                     to_write.reset(create_response(
                         Response::bad_sequence_of_commands(),
                         message,
@@ -209,7 +216,6 @@ impl HandlerRead {
                             ));
                             return Ok(());
                         }
-
                         // All okay, transition
                         to_write.reset(create_response(
                             Response::file_status_okay(),

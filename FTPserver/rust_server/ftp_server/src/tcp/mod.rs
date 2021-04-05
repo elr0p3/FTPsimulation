@@ -83,14 +83,14 @@ fn handle_request_type(
         | RequestType::FileTransferPassive(stream, _, _) => {
             if interest == Interest::AIO {
                 println!("deregister");
-                poll.registry().deregister(stream)?;
+            // poll.registry().deregister(stream)?;
             } else {
                 poll.registry().reregister(stream, token, interest)?;
             }
         }
         RequestType::PassiveModePort(stream, _) => {
             if interest == Interest::AIO {
-                poll.registry().deregister(stream)?;
+                // poll.registry().deregister(stream)?;
             } else {
                 poll.registry().reregister(stream, token, interest)?;
             }
@@ -133,6 +133,10 @@ pub fn create_server<T: AsRef<str>>(
 
         // Process each event.
         for event in events.iter() {
+            if event.is_error() || event.is_read_closed() {
+                let _ = tcp_implementation.close_connection(&poll, event.token());
+                continue;
+            }
             // We can use the token we previously provided to `register` to
             // determine for which socket the event is.
             match event.token() {
@@ -140,7 +144,8 @@ pub fn create_server<T: AsRef<str>>(
                     // If this is an event for the server, it means a connection
                     // is ready to be accepted.
                     let (stream, _addr) = server.accept()?;
-                    if let Err(_) =
+
+                    if let Err(err) =
                         tcp_implementation.new_connection(SERVER, Token(id), &poll, stream)
                     {
                         tcp_implementation.close_connection(&poll, Token(id))?;
@@ -151,13 +156,7 @@ pub fn create_server<T: AsRef<str>>(
                     continue;
                 }
                 Token(_) => {
-                    if event.is_read_closed() {
-                        if let Err(error) =
-                            tcp_implementation.close_connection(&poll, event.token())
-                        {
-                            println!("message when closing a connection: {}", error);
-                        }
-                    } else if event.is_writable() {
+                    if event.is_writable() {
                         if let Err(err) =
                             tcp_implementation.write_connection(&poll, waker.clone(), event)
                         {

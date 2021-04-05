@@ -223,10 +223,12 @@ impl FTPServer {
         let _ = self.deregister(poll, rc);
         match &mut rc.request_type {
             RequestType::CommandTransfer(stream, _, _) => {
+                stream.flush();
                 stream.shutdown(Shutdown::Both)?;
             }
 
             RequestType::FileTransferActive(stream, _, _) => {
+                stream.flush();
                 stream.shutdown(Shutdown::Both)?;
             }
 
@@ -237,13 +239,6 @@ impl FTPServer {
             RequestType::PassiveModePort(port, _) => {}
         }
         Ok(())
-    }
-
-    fn action_add(actions: &ActionList, action: Action) {
-        println!("adding an action...");
-        let mut actions_locked = actions.lock().unwrap();
-        actions_locked.push(action);
-        println!("added action");
     }
 }
 
@@ -287,9 +282,11 @@ impl TCPImplementation for FTPServer {
         waker: Arc<Waker>,
         event: &Event,
     ) -> Result<(), Error> {
+        let token = event.token();
+        println!("[WRITE_CONNECTION] - {} - Start Writing", token.0);
         // TODO Make this a macro!
         let map_conn_arc = self.connections.clone();
-        let token = event.token();
+
         let map_conn = map_conn_arc.lock().unwrap();
         let connection = {
             let connection = map_conn.get(&token).ok_or(ErrorKind::NotFound)?;
@@ -305,16 +302,17 @@ impl TCPImplementation for FTPServer {
             let mut conn = connection.lock().unwrap();
             let mut handler = HandlerWrite::new(token, map_conn_arc.clone(), connection.clone());
             if let Err(err) = handler.handle_write(&mut conn.request_type, &waker) {
-                println!("fatal error {}", err);
+                println!("[WRITE_CONNECTION] - {} - Fatal error -> {}", token.0, err);
+                return;
             }
             drop(conn);
-            println!("Adding actions!");
             let mut actions_locked = actions_ref.lock().unwrap();
             for action in handler.actions {
                 actions_locked.push(action);
-                let _ = waker.wake();
             }
-            println!("Finished adding actions!");
+            drop(actions_locked);
+            let _ = waker.wake();
+            println!("[WRITE_CONNECTION] - {} - Finished task", token.0);
         });
         Ok(())
     }
@@ -325,6 +323,7 @@ impl TCPImplementation for FTPServer {
         waker: Arc<Waker>,
         event: &Event,
     ) -> Result<(), Error> {
+        println!("[READ_CONNECTION] - {} - Start read", event.token().0);
         // first read
         let map_conn = self.connections.clone();
         let map_conn = map_conn.lock().unwrap();
@@ -347,30 +346,54 @@ impl TCPImplementation for FTPServer {
                 actions.clone(),
                 next_id,
             );
+            let is_err = response.is_err();
+
             // If it's a definitive error
-            let is_err = response.is_err() && response.unwrap_err().kind() != ErrorKind::WouldBlock;
-            if is_err {
-                println!("Closing read because of an error...");
+            let is_would_block =
+                is_err && response.as_ref().unwrap_err().kind() == ErrorKind::WouldBlock;
+            let is_error_for_closing_connection = is_err && !is_would_block;
+            // TODO There is something strange when there is would block error,
+            // ?? Investigate
+            if is_error_for_closing_connection {
+                println!(
+                    "[READ_CONNECTION] - {} - Closing connection because error, {}",
+                    token.0,
+                    response.unwrap_err()
+                );
+                drop(connection_mutex);
                 let _ = close_connection_recursive(
                     handler_read.connection_db.clone(),
                     handler_read.connection_token,
                 );
                 let _ = waker.wake();
+            } else if is_would_block {
+                drop(connection_mutex);
+                println!("[READ_CONNECTION] - {} - Would block", token.0);
+                let mut actions = actions.lock().unwrap();
+                actions.push((
+                    handler_read.connection_token,
+                    connection_arc.clone(),
+                    Interest::READABLE,
+                ));
+                let _ = waker.wake();
+                drop(actions);
             } else {
                 drop(connection_mutex);
+                println!("[READ_CONNECTION] - {} - Adding actions", token.0);
                 let mut actions = actions.lock().unwrap();
                 for action in handler_read.actions {
-                    println!("pushing action...");
                     actions.push(action);
-                    let _ = waker.wake();
                 }
+                drop(actions);
+                let _ = waker.wake();
             }
-            println!("Finished doing read of request_context");
+            println!("[READ_CONNECTION] - {} - Finishing task", token.0);
         });
         Ok(())
     }
 
     fn close_connection(&mut self, poll: &Poll, token: Token) -> Result<(), Error> {
+        println!("[CLOSE_CONNECTION] - {} - Closing connection", token.0);
         let map_conn_arc = self.connections.clone();
         let map_conn = map_conn_arc.lock().unwrap();
         let conn = {
@@ -382,26 +405,38 @@ impl TCPImplementation for FTPServer {
             arc
         };
         drop(map_conn);
-        let mut conn = conn.lock().unwrap();
         self.connections.lock().unwrap().remove(&token);
+
+        let mut conn = conn.lock().unwrap();
         match &mut conn.request_type {
             RequestType::FileTransferActive(stream, _, _)
             | RequestType::FileTransferPassive(stream, _, _) => {
                 poll.registry().deregister(stream)?;
+                stream.flush();
                 stream.shutdown(Shutdown::Both)?;
-                println!("connection with the client was closed");
+                println!(
+                    "[CLOSE_CONNECTION] - {} - Closing connection FTA or FTP",
+                    token.0
+                );
             }
             RequestType::CommandTransfer(stream, _, conn) => {
-                println!("Connection with the client (COMMAND) is closed");
+                println!(
+                    "[CLOSE_CONNECTION] - {} - Closing connection command",
+                    token.0
+                );
                 // Ignore error to be honest, don't care if we try to close twice
                 let _ = poll.registry().deregister(stream);
+                stream.flush();
                 let _ = stream.shutdown(Shutdown::Both);
                 let conn = conn.take();
                 if let Some(conn) = &conn {
                     let mut map_conn = map_conn_arc.lock().unwrap();
                     let connection = map_conn.get_mut(conn);
                     if let Some(connection) = connection {
-                        println!("Disconnecting from dangling transfer connection");
+                        println!(
+                            "[CLOSE_CONNECTION] - {} - Closing dangling connection",
+                            token.0
+                        );
                         let mut connection = connection.lock().unwrap();
                         // Don't care if we close twice
                         let _ = self.deregister_and_shutdown(poll, &mut connection);
@@ -411,9 +446,9 @@ impl TCPImplementation for FTPServer {
                 }
             }
             RequestType::PassiveModePort(stream, _) => {
+                println!("[CLOSE_CONNECTION] - {} - Closing port", token.0);
                 // We actually just deregister when we write
                 poll.registry().deregister(stream)?;
-                println!("closed a connection!");
             }
         }
         Ok(())
@@ -422,10 +457,10 @@ impl TCPImplementation for FTPServer {
 
 #[cfg(test)]
 mod ftp_server_testing {
-    use std::io::Read;
     use std::io::Write;
     use std::net::TcpListener;
     use std::net::TcpStream;
+    use std::{io::Read, time::Duration};
     // use mio::net::{SocketAddr, TcpListener};
 
     fn expect_response(stream: &mut TcpStream, response_expects: &str) {
@@ -437,7 +472,72 @@ mod ftp_server_testing {
 
     #[test]
     fn it_works() {
-        for i in 0..100 {
+        for i in 0..10 {
+            let result = TcpStream::connect("127.0.0.1:8080");
+            if let Err(err) = result {
+                panic!("{}", err);
+            }
+            let mut stream = result.unwrap();
+            expect_response(&mut stream, "220 Service ready for new user.\r\n");
+            let srv = TcpListener::bind("127.0.0.1:2234").expect("to create server");
+            // println!("expect writing everything");
+            stream
+                .write_all(&"PORT 127,0,0,1,8,186\r\n".as_bytes())
+                .expect("writing everything");
+            let join = std::thread::spawn(move || {
+                // println!("accept conn");
+                let (mut conn, _) = srv.accept().expect("expect to receive connection");
+                let mut buff = [0; 1024];
+                // println!("read 1st");
+                let read = conn.read(&mut buff).expect("to have read");
+                assert_eq!(read, 1000);
+                assert_eq!(buff[0], 1);
+                // println!("read 2nd");
+                let possible_err = conn.read(&mut buff);
+                assert!(possible_err.unwrap() == 0);
+            });
+            // println!("Command okay");
+            expect_response(&mut stream, "200 Command okay.\r\n");
+            // println!("List");
+            stream
+                .write_all(&"LIST\r\n".as_bytes())
+                .expect("writing everything");
+            expect_response(
+                &mut stream,
+                "150 File status okay; about to open data connection.\r\n",
+            );
+            // println!("Closing");
+            expect_response(&mut stream, "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n");
+            join.join().unwrap();
+            // std::thread::sleep(Duration::from_millis(20));
+            // let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
+            // stream
+            //     .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
+            //     .expect("writing everything");
+            // let join = std::thread::spawn(move || {
+            //     let (mut conn, _) = srv.accept().expect("expect to receive connection");
+            //     let mut buff = [0; 1024];
+            //     let read = conn.read(&mut buff).expect("to have read");
+            //     let expected = "Hello world!";
+            //     assert_eq!(read, expected.len());
+            //     assert_eq!(std::str::from_utf8(&buff[..read]).unwrap(), expected);
+            //     let possible_err = conn.read(&mut buff);
+            //     assert!(possible_err.unwrap() == 0);
+            // });
+            // expect_response(&mut stream, "200 Command okay.\r\n");
+            // stream
+            //     .write_all(&"RETR ./testfile.txt\r\n".as_bytes())
+            //     .expect("writing everything");
+            // expect_response(&mut stream, "150 File download starts!\r\n");
+            // join.join().unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    #[test]
+    fn it_works2() {
+        for i in 0..30 {
+            println!("again");
             let result = TcpStream::connect("127.0.0.1:8080");
             if let Err(err) = result {
                 panic!("{}", err);
@@ -449,15 +549,21 @@ mod ftp_server_testing {
                 .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
                 .expect("writing everything");
             let join = std::thread::spawn(move || {
+                println!("accept conn");
                 let (mut conn, _) = srv.accept().expect("expect to receive connection");
                 let mut buff = [0; 1024];
+                println!("read 1st");
                 let read = conn.read(&mut buff).expect("to have read");
                 assert_eq!(read, 1000);
                 assert_eq!(buff[0], 1);
+                println!("read 2nd");
                 let possible_err = conn.read(&mut buff);
                 assert!(possible_err.unwrap() == 0);
+                println!("f")
             });
+            println!("Command okay");
             expect_response(&mut stream, "200 Command okay.\r\n");
+            println!("List");
             stream
                 .write_all(&"LIST\r\n".as_bytes())
                 .expect("writing everything");
@@ -465,28 +571,31 @@ mod ftp_server_testing {
                 &mut stream,
                 "150 File status okay; about to open data connection.\r\n",
             );
+            println!("Closing");
             expect_response(&mut stream, "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n");
             join.join().unwrap();
-            let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
-            stream
-                .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
-                .expect("writing everything");
-            let join = std::thread::spawn(move || {
-                let (mut conn, _) = srv.accept().expect("expect to receive connection");
-                let mut buff = [0; 1024];
-                let read = conn.read(&mut buff).expect("to have read");
-                let expected = "Hello world!";
-                assert_eq!(read, expected.len());
-                assert_eq!(std::str::from_utf8(&buff[..read]).unwrap(), expected);
-                let possible_err = conn.read(&mut buff);
-                assert!(possible_err.unwrap() == 0);
-            });
-            expect_response(&mut stream, "200 Command okay.\r\n");
-            stream
-                .write_all(&"RETR ./testfile.txt\r\n".as_bytes())
-                .expect("writing everything");
-            expect_response(&mut stream, "150 File download starts!\r\n");
-            join.join().unwrap();
+            // std::thread::sleep(Duration::from_millis(20));
+            // let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
+            // stream
+            //     .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
+            //     .expect("writing everything");
+            // let join = std::thread::spawn(move || {
+            //     let (mut conn, _) = srv.accept().expect("expect to receive connection");
+            //     let mut buff = [0; 1024];
+            //     let read = conn.read(&mut buff).expect("to have read");
+            //     let expected = "Hello world!";
+            //     assert_eq!(read, expected.len());
+            //     assert_eq!(std::str::from_utf8(&buff[..read]).unwrap(), expected);
+            //     let possible_err = conn.read(&mut buff);
+            //     assert!(possible_err.unwrap() == 0);
+            // });
+            // expect_response(&mut stream, "200 Command okay.\r\n");
+            // stream
+            //     .write_all(&"RETR ./testfile.txt\r\n".as_bytes())
+            //     .expect("writing everything");
+            // expect_response(&mut stream, "150 File download starts!\r\n");
+            // join.join().unwrap();
+            // std::thread::sleep(Duration::from_millis(100));
         }
     }
 }

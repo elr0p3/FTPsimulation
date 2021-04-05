@@ -24,20 +24,17 @@ pub fn close_connection_recursive(
     drop(map_conn);
     let mut conn = conn.lock().unwrap();
     connection_database.lock().unwrap().remove(&to_delete);
-    println!("[CLOSED CONNECTION]");
+    println!("[CLOSE_CONNECTION_RECURSIVE] Closing connection recursively");
     match &mut conn.request_type {
         RequestType::FileTransferActive(stream, _, _)
         | RequestType::FileTransferPassive(stream, _, _) => {
             let _ = stream.shutdown(Shutdown::Both)?;
-            println!("connection with the client was closed");
         }
         RequestType::CommandTransfer(stream, _, conn) => {
-            println!("connection with the client was closed");
             // Ignore error to be honest, don't care if we try to close twice
             let _ = stream.shutdown(Shutdown::Both);
             let conn = conn.take();
             if let Some(conn) = &conn {
-                println!("Closed dangling connections");
                 close_connection_recursive(map_conn_arc.clone(), *conn)?;
             }
         }
@@ -91,13 +88,22 @@ impl HandlerWrite {
     ) -> Result<(), Error> {
         match request_type {
             RequestType::CommandTransfer(stream, to_write, t) => {
+                let maybe_error = stream.flush();
+                if let Err(err) = maybe_error {
+                    println!("[HANDLE_WRITE] CMD Error flushing the stream: {}", err);
+                }
                 let written = stream.write(&to_write.buffer[to_write.offset..]);
                 if let Ok(written) = written {
-                    println!("writing! {}", written);
+                    println!("[HANDLE_WRITE] CMD Writing {} bytes", written);
                     if written + to_write.offset >= to_write.buffer.len() {
+                        println!(
+                            "[HANDLE_WRITE] - {} - Going back to readable...",
+                            self.connection_token.0
+                        );
                         to_write.buffer.clear();
                         to_write.offset = 0;
                         self.keep_interest(waker, Interest::READABLE)?;
+                        // THIS
                         if let Some(callback) = to_write.callback_after_sending.take() {
                             callback();
                         }
@@ -108,22 +114,32 @@ impl HandlerWrite {
                     }
                 } else if let Err(err) = written {
                     if err.kind() == ErrorKind::WouldBlock {
+                        println!(
+                            "[HANDLE_WRITE] - {} - Got would block error, keep writing",
+                            self.connection_token.0
+                        );
                         self.keep_interest(waker, Interest::WRITABLE)?;
                     } else {
+                        println!(
+                            "[HANDLE_WRITE] - {} - Error writing to socket, closing connection. Error: {}",
+                            self.connection_token.0,
+                            err
+                        );
                         self.close_connection(stream)?;
                         if let Some(t) = t {
                             close_connection_recursive(self.connection_db.clone(), *t)?;
                         }
-                        println!("error writing because: {}", err);
                     }
                 }
             }
 
             RequestType::FileTransferPassive(stream, ftt, conn_tok) => {
+                let _ = stream.flush();
                 self.handle_file_transfer(stream, ftt, waker, *conn_tok)?;
             }
 
             RequestType::FileTransferActive(stream, ftt, conn_tok) => {
+                let _ = stream.flush();
                 self.handle_file_transfer(stream, ftt, waker, *conn_tok)?;
             }
 
@@ -185,9 +201,11 @@ impl HandlerWrite {
     ) -> Result<(), Error> {
         let written = stream.write(&to_write.buffer[to_write.offset..]);
         if let Ok(written) = written {
-            println!("Writing file transfer! {}", written);
+            println!(
+                "[WRITE_BUFFER_FILE_TRANSFER] {} - {} bytes written",
+                self.connection_token.0, written
+            );
             if written + to_write.offset >= to_write.buffer.len() {
-                println!("Closing write connection...");
                 stream.shutdown(Shutdown::Both)?;
                 let mut map_conn = self.connection_db.lock().unwrap();
                 assert!(map_conn.remove(&self.connection_token).is_some());
@@ -198,14 +216,18 @@ impl HandlerWrite {
                         &mut command_connection_mutex.request_type
                     {
                         t.take();
-                        println!("Succesfully sending to the client!");
+                        println!(
+                            "[WRITE_BUFFER_FILE_TRANSFER] {} - Succesfully sending to the client, sending close data connection for token: {:?}", 
+                            self.connection_token.0,
+                            cmd_connection_token
+                        );
                         buffer_to_write.buffer = create_response(
                             Response::closing_data_connection(),
                             "Closing data connection. Requested file action successful (for example, file transfer or file abort).",
                         );
                         buffer_to_write.offset = 0;
                     } else {
-                        println!("Unexpected request type for command transfer");
+                        println!("[WRITE_BUFFER_FILE_TRANSFER] {} - Unexpected request type for command transfer", self.connection_token.0);
                     }
                     drop(command_connection_mutex);
                     self.actions.push((
@@ -214,16 +236,31 @@ impl HandlerWrite {
                         Interest::WRITABLE,
                     ));
                 } else {
-                    println!("not found connection...");
+                    println!(
+                        "[WRITE_BUFFER_FILE_TRANSFER] {} - Not found connection in DB",
+                        self.connection_token.0
+                    );
                 }
                 return Ok(());
             }
             to_write.offset += written;
             self.keep_interest(waker, Interest::WRITABLE)?;
+            println!(
+                "[WRITE_BUFFER_FILE_TRANSFER] {} - Keep writing...",
+                self.connection_token.0
+            );
         } else if let Err(err) = written {
             if err.kind() == ErrorKind::WouldBlock {
+                println!(
+                    "[WRITE_BUFFER_FILE_TRANSFER] {} - Would block error, keep writing",
+                    self.connection_token.0
+                );
                 self.keep_interest(waker, Interest::WRITABLE)?;
             } else {
+                println!(
+                    "[WRITE_BUFFER_FILE_TRANSFER] {} - Closing connection because {}",
+                    self.connection_token.0, err
+                );
                 self.close_connection(stream)?;
             }
         }
