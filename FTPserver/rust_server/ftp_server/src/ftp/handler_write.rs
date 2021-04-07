@@ -81,11 +81,13 @@ impl HandlerWrite {
         Ok(())
     }
 
+    /// Handles the write request depending on the context of the request.
+    /// Also will return a possible callback that needs to be called if it's Ok
     pub fn handle_write(
         &mut self,
         request_type: &mut RequestType,
         waker: &Waker,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Box<dyn FnOnce() + Send>>, Error> {
         match request_type {
             RequestType::CommandTransfer(stream, to_write, t) => {
                 let maybe_error = stream.flush();
@@ -103,9 +105,10 @@ impl HandlerWrite {
                         to_write.buffer.clear();
                         to_write.offset = 0;
                         self.keep_interest(waker, Interest::READABLE)?;
-                        if let Some(callback) = to_write.callback_after_sending.take() {
-                            callback();
-                        }
+                        return Ok(to_write.callback_after_sending.take());
+                    // if let Some(callback) = to_write.callback_after_sending.take() {
+                    //     callback();
+                    // }
                     } else {
                         // Keep writing
                         to_write.offset += written;
@@ -144,7 +147,7 @@ impl HandlerWrite {
 
             _ => return Err(Error::from(ErrorKind::NotFound)),
         }
-        Ok(())
+        Ok(None)
     }
 
     fn handle_file_transfer(
@@ -250,6 +253,13 @@ impl HandlerWrite {
             );
         } else if let Err(err) = written {
             if err.kind() == ErrorKind::WouldBlock {
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open("./debug_write.txt")
+                    .unwrap()
+                    .write(format!("\nWRITE {:?}", err).as_bytes())
+                    .unwrap();
                 println!(
                     "[WRITE_BUFFER_FILE_TRANSFER] {} - Would block error, keep writing",
                     self.connection_token.0

@@ -259,7 +259,7 @@ impl TCPImplementation for FTPServer {
         poll: &Poll,
         mut stream: TcpStream,
     ) -> Result<(), std::io::Error> {
-        println!("[NEW_CONNECTION]");
+        println!("new connection!");
         poll.registry()
             .register(&mut stream, token, Interest::WRITABLE)?;
         self.add_connection(
@@ -301,11 +301,17 @@ impl TCPImplementation for FTPServer {
         spawn(move || {
             let mut conn = connection.lock().unwrap();
             let mut handler = HandlerWrite::new(token, map_conn_arc.clone(), connection.clone());
-            if let Err(err) = handler.handle_write(&mut conn.request_type, &waker) {
+            let write_result = handler.handle_write(&mut conn.request_type, &waker);
+            if let Err(err) = &write_result {
                 println!("[WRITE_CONNECTION] - {} - Fatal error -> {}", token.0, err);
                 return;
             }
+            // We drop the connection mutex here because we are promising the callback that it's 100% safe to take
+            // any kind of mutex without getting a deadlock
             drop(conn);
+            if let Some(write_callback) = write_result.unwrap() {
+                write_callback();
+            }
             let mut actions_locked = actions_ref.lock().unwrap();
             for action in handler.actions {
                 actions_locked.push(action);
@@ -332,7 +338,6 @@ impl TCPImplementation for FTPServer {
             let arc = connection.clone();
             arc
         };
-
         let token = event.token();
         drop(map_conn);
         self.deregister(poll, &mut conn.lock().unwrap())?;
@@ -354,6 +359,26 @@ impl TCPImplementation for FTPServer {
             let is_would_block =
                 is_err && response.as_ref().unwrap_err().kind() == ErrorKind::WouldBlock;
             let is_error_for_closing_connection = is_err && !is_would_block;
+            if is_would_block {
+                fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open("./debug.txt")
+                    .unwrap()
+                    .write(
+                        format!(
+                            "{:?} {:?}\n",
+                            response,
+                            handler_read
+                                .actions
+                                .iter()
+                                .map(|e| e.2)
+                                .collect::<Vec<Interest>>()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+            }
             // TODO There is something strange when there is would block error,
             // ?? Investigate
             if is_error_for_closing_connection {
@@ -372,6 +397,9 @@ impl TCPImplementation for FTPServer {
                 drop(connection_mutex);
                 println!("[READ_CONNECTION] - {} - Would block", token.0);
                 let mut actions = actions.lock().unwrap();
+                // The reason we are doing readable + writable is
+                // that we don't know in a certain way the state of this socket!
+                // Probably this event has been called just after deregistering
                 actions.push((
                     handler_read.connection_token,
                     connection_arc.clone(),
@@ -408,6 +436,7 @@ impl TCPImplementation for FTPServer {
         };
         drop(map_conn);
         self.connections.lock().unwrap().remove(&token);
+
         let mut conn = conn.lock().unwrap();
         match &mut conn.request_type {
             RequestType::FileTransferActive(stream, _, _)
@@ -426,17 +455,9 @@ impl TCPImplementation for FTPServer {
                     token.0
                 );
                 // Ignore error to be honest, don't care if we try to close twice
-                let e = poll.registry().deregister(stream);
-                assert!(e.is_ok());
+                let _ = poll.registry().deregister(stream);
                 stream.flush();
-                let e = stream.shutdown(Shutdown::Both);
-                if e.is_err() {
-                    println!(
-                        "[CLOSE_CONNECTION] Error - {} - {}",
-                        token.0,
-                        e.unwrap_err()
-                    );
-                }
+                let _ = stream.shutdown(Shutdown::Both);
                 let conn = conn.take();
                 if let Some(conn) = &conn {
                     let mut map_conn = map_conn_arc.lock().unwrap();
@@ -466,34 +487,30 @@ impl TCPImplementation for FTPServer {
 
 #[cfg(test)]
 mod ftp_server_testing {
-    use std::io::Write;
+    use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::net::TcpStream;
     use std::{io::Read, time::Duration};
     // use mio::net::{SocketAddr, TcpListener};
 
     fn expect_response(stream: &mut TcpStream, response_expects: &str) {
-        let mut buff = [0; 1024];
-        let mut r = 0;
-        while !buff.contains(&b'\n') {
-            let read = stream.read(&mut buff[r..]).expect("read didn't go well");
-            r += read;
-        }
-        let str = std::str::from_utf8(&buff[0..r]).expect("error parsing response");
+        // let mut buff = [0; 1024];
+        let mut b = BufReader::new(stream);
+        // let read = stream.read_until(&mut buff).expect("read didn't go well");
+        // let str = std::str::from_utf8(&buff[0..read]).expect("error parsing response");
+        let mut str = String::new();
+        b.read_line(&mut str).expect("to work");
         assert_eq!(response_expects, str);
     }
 
     #[test]
     fn it_works() {
-        for i in 0..10 {
+        for _ in 0..100 {
             let result = TcpStream::connect("127.0.0.1:8080");
             if let Err(err) = result {
                 panic!("{}", err);
             }
             let mut stream = result.unwrap();
-            // stream
-            //     .set_read_timeout(Some(Duration::from_millis(300)))
-            //     .unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
             let srv = TcpListener::bind("127.0.0.1:2234").expect("to create server");
             // println!("expect writing everything");
@@ -551,21 +568,18 @@ mod ftp_server_testing {
     }
 
     #[test]
-    fn it_works3() {
-        for i in 0..30 {
+    fn it_works2() {
+        for _ in 0..100 {
             println!("again");
             let result = TcpStream::connect("127.0.0.1:8080");
             if let Err(err) = result {
                 panic!("{}", err);
             }
             let mut stream = result.unwrap();
-            // stream
-            //     .set_read_timeout(Some(Duration::from_millis(300)))
-            //     .unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
-            let srv = TcpListener::bind("127.0.0.1:2233").expect("to create server");
+            let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
             stream
-                .write_all(&"PORT 127,0,0,1,8,185\r\n".as_bytes())
+                .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
                 .expect("writing everything");
             let join = std::thread::spawn(move || {
                 println!("accept conn");
@@ -594,9 +608,9 @@ mod ftp_server_testing {
             expect_response(&mut stream, "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n");
             join.join().unwrap();
             std::thread::sleep(Duration::from_millis(20));
-            let srv = TcpListener::bind("127.0.0.1:2233").expect("to create server");
+            let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
             stream
-                .write_all(&"PORT 127,0,0,1,8,185\r\n".as_bytes())
+                .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
                 .expect("writing everything");
             let join = std::thread::spawn(move || {
                 let (mut conn, _) = srv.accept().expect("expect to receive connection");
@@ -619,21 +633,18 @@ mod ftp_server_testing {
     }
 
     #[test]
-    fn it_works2() {
-        for i in 0..30 {
+    fn it_works3() {
+        for _ in 0..100 {
             println!("again");
             let result = TcpStream::connect("127.0.0.1:8080");
             if let Err(err) = result {
                 panic!("{}", err);
             }
             let mut stream = result.unwrap();
-            // stream
-            //     .set_read_timeout(Some(Duration::from_millis(300)))
-            //     .unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
-            let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
+            let srv = TcpListener::bind("127.0.0.1:2233").expect("to create server");
             stream
-                .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
+                .write_all(&"PORT 127,0,0,1,8,185\r\n".as_bytes())
                 .expect("writing everything");
             let join = std::thread::spawn(move || {
                 println!("accept conn");
@@ -661,28 +672,28 @@ mod ftp_server_testing {
             println!("Closing");
             expect_response(&mut stream, "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n");
             join.join().unwrap();
-            std::thread::sleep(Duration::from_millis(20));
-            let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
-            stream
-                .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
-                .expect("writing everything");
-            let join = std::thread::spawn(move || {
-                let (mut conn, _) = srv.accept().expect("expect to receive connection");
-                let mut buff = [0; 1024];
-                let read = conn.read(&mut buff).expect("to have read");
-                let expected = "Hello world!";
-                assert_eq!(read, expected.len());
-                assert_eq!(std::str::from_utf8(&buff[..read]).unwrap(), expected);
-                let possible_err = conn.read(&mut buff);
-                assert!(possible_err.unwrap() == 0);
-            });
-            expect_response(&mut stream, "200 Command okay.\r\n");
-            stream
-                .write_all(&"RETR ./testfile.txt\r\n".as_bytes())
-                .expect("writing everything");
-            expect_response(&mut stream, "150 File download starts!\r\n");
-            join.join().unwrap();
-            std::thread::sleep(Duration::from_millis(20));
+            //     std::thread::sleep(Duration::from_millis(20));
+            //     let srv = TcpListener::bind("127.0.0.1:2233").expect("to create server");
+            //     stream
+            //         .write_all(&"PORT 127,0,0,1,8,185\r\n".as_bytes())
+            //         .expect("writing everything");
+            //     let join = std::thread::spawn(move || {
+            //         let (mut conn, _) = srv.accept().expect("expect to receive connection");
+            //         let mut buff = [0; 1024];
+            //         let read = conn.read(&mut buff).expect("to have read");
+            //         let expected = "Hello world!";
+            //         assert_eq!(read, expected.len());
+            //         assert_eq!(std::str::from_utf8(&buff[..read]).unwrap(), expected);
+            //         let possible_err = conn.read(&mut buff);
+            //         assert!(possible_err.unwrap() == 0);
+            //     });
+            //     expect_response(&mut stream, "200 Command okay.\r\n");
+            //     stream
+            //         .write_all(&"RETR ./testfile.txt\r\n".as_bytes())
+            //         .expect("writing everything");
+            //     expect_response(&mut stream, "150 File download starts!\r\n");
+            //     join.join().unwrap();
+            //     std::thread::sleep(Duration::from_millis(20));
         }
     }
 }
