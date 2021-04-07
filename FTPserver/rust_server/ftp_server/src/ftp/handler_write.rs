@@ -150,6 +150,21 @@ impl HandlerWrite {
         Ok(None)
     }
 
+    fn answer_command(&mut self, cmd_connection_token: Token, msg: &str) {
+        let mut db = self.connection_db.lock().unwrap();
+        let cmd = db.get_mut(&cmd_connection_token);
+        if let Some(cmd) = cmd {
+            let cmd_arc = cmd.clone();
+            let mut cmd = cmd_arc.lock().unwrap();
+            if let RequestType::CommandTransfer(_stream, to_write, t) = &mut cmd.request_type {
+                t.take();
+                to_write.reset(create_response(Response::closing_data_connection(), msg));
+                self.actions
+                    .push((cmd_connection_token, cmd_arc.clone(), Interest::WRITABLE));
+            }
+        }
+    }
+
     fn handle_file_transfer(
         &mut self,
         stream: &mut TcpStream,
@@ -180,7 +195,12 @@ impl HandlerWrite {
                         if err.kind() == ErrorKind::WouldBlock {
                             let err_seek = file.seek(SeekFrom::Current(-(read as i64)));
                             if err_seek.is_err() {
-                                println!("[ERROR SEEK] {:?}", err_seek);
+                                println!("[ERROR SEEK] Unknown error with seek :( {:?}", err_seek);
+                                let _ = self.close_connection(stream);
+                                self.answer_command(
+                                    cmd_connection_token,
+                                    "Unknown error with file transfer",
+                                );
                                 return Ok(());
                             }
                             println!(
@@ -194,36 +214,23 @@ impl HandlerWrite {
                             ));
                             return Ok(());
                         } else {
+                            println!("[HANDLE_FILE_TRANSFER] Error transfering file {:?}", err);
+                            let _ = self.close_connection(stream);
+                            self.answer_command(
+                                cmd_connection_token,
+                                "Error with file transfer connection",
+                            );
                         }
                     } else {
                         let read_end = err.unwrap();
                         assert!(read_end == read);
                     }
                 }
-                // // TODO Handle errors
-                // let er = std::io::copy(file, stream);
-                // println!("[FILE_TRANSFER_RESULT] {:?}", er);
                 let _ = self.close_connection(stream);
-                let mut db = self.connection_db.lock().unwrap();
-                let cmd = db.get_mut(&cmd_connection_token);
-                if let Some(cmd) = cmd {
-                    let cmd_arc = cmd.clone();
-                    let mut cmd = cmd_arc.lock().unwrap();
-                    if let RequestType::CommandTransfer(_stream, to_write, t) =
-                        &mut cmd.request_type
-                    {
-                        t.take();
-                        to_write.reset(create_response(
-                            Response::closing_data_connection(),
-                            "Closing data connection. Requested file action successful. (file transfer)",
-                        ));
-                        self.actions.push((
-                            cmd_connection_token,
-                            cmd_arc.clone(),
-                            Interest::WRITABLE,
-                        ));
-                    }
-                }
+                self.answer_command(
+                    cmd_connection_token,
+                    "Closing data connection. Requested file action successful. (file transfer)",
+                );
                 Ok(())
             }
 
