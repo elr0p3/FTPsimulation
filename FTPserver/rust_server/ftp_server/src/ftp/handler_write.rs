@@ -4,7 +4,7 @@ use super::{
 };
 use super::{response::Response, FileTransferType};
 use mio::{net::TcpStream, Interest, Waker};
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::{io::Error, net::Shutdown};
 
 pub fn close_connection_recursive(
@@ -164,8 +164,45 @@ impl HandlerWrite {
 
             // TODO Handle chunks!!!!!!
             FileTransferType::FileDownload(file) => {
-                // TODO Handle errors
-                let _ = std::io::copy(file, stream);
+                let mut buf = [0; 1024];
+                loop {
+                    let read = file.read(&mut buf);
+                    if read.is_err() {
+                        //...
+                        panic!("Unhandled error");
+                    }
+                    let read = read.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    let err = stream.write(&buf[0..read]);
+                    if let Err(err) = &err {
+                        if err.kind() == ErrorKind::WouldBlock {
+                            let err_seek = file.seek(SeekFrom::Current(-(read as i64)));
+                            if err_seek.is_err() {
+                                println!("[ERROR SEEK] {:?}", err_seek);
+                                return Ok(());
+                            }
+                            println!(
+                                "[HANDLE_FILE_TRANSFER] {} - Is would block, let's write again",
+                                self.connection_token.0
+                            );
+                            self.actions.push((
+                                self.connection_token,
+                                self.connection.clone(),
+                                Interest::WRITABLE,
+                            ));
+                            return Ok(());
+                        } else {
+                        }
+                    } else {
+                        let read_end = err.unwrap();
+                        assert!(read_end == read);
+                    }
+                }
+                // // TODO Handle errors
+                // let er = std::io::copy(file, stream);
+                // println!("[FILE_TRANSFER_RESULT] {:?}", er);
                 let _ = self.close_connection(stream);
                 let mut db = self.connection_db.lock().unwrap();
                 let cmd = db.get_mut(&cmd_connection_token);
