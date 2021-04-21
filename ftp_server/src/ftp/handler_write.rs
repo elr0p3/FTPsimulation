@@ -7,41 +7,42 @@ use mio::{net::TcpStream, Interest, Waker};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::{io::Error, net::Shutdown};
 
-pub fn close_connection_recursive(
-    connection_database: HashMutex<Token, RequestContextMutex>,
-    to_delete: Token,
-) -> Result<(), Error> {
-    let map_conn_arc = connection_database.clone();
-    let map_conn = map_conn_arc.lock().unwrap();
-    let conn = {
-        let connection = map_conn.get(&to_delete);
-        if connection.is_none() {
-            return Ok(());
-        }
-        let arc = connection.unwrap().clone();
-        arc
-    };
-    drop(map_conn);
-    connection_database.lock().unwrap().remove(&to_delete);
-    let mut conn = conn.lock().unwrap();
-    println!("[CLOSE_CONNECTION_RECURSIVE] Closing connection recursively");
-    match &mut conn.request_type {
-        RequestType::FileTransferActive(stream, _, _)
-        | RequestType::FileTransferPassive(stream, _, _) => {
-            let _ = stream.shutdown(Shutdown::Both)?;
-        }
-        RequestType::CommandTransfer(stream, _, conn) => {
-            // Ignore error to be honest, don't care if we try to close twice
-            let _ = stream.shutdown(Shutdown::Both);
-            let conn = conn.take();
-            if let Some(conn) = &conn {
-                close_connection_recursive(map_conn_arc.clone(), *conn)?;
-            }
-        }
-        RequestType::PassiveModePort(_, _) => {}
-    }
-    Ok(())
-}
+// pub fn close_connection_recursive(
+//     connection_database: HashMutex<Token, RequestContextMutex>,
+//     to_delete: Token,
+// ) -> Result<(), Error> {
+//     let map_conn_arc = connection_database.clone();
+//     let map_conn = map_conn_arc.lock().unwrap();
+//     let conn = {
+//         let connection = map_conn.get(&to_delete);
+//         if connection.is_none() {
+//             return Ok(());
+//         }
+//         let arc = connection.unwrap().clone();
+//         arc
+//     };
+//     drop(map_conn);
+//     connection_database.lock().unwrap().remove(&to_delete);
+//     let mut conn = conn.lock().unwrap();
+//     println!("[CLOSE_CONNECTION_RECURSIVE] Closing connection recursively");
+//     match &mut conn.request_type {
+//         RequestType::Closed(stream)
+//         | RequestType::FileTransferActive(stream, _, _)
+//         | RequestType::FileTransferPassive(stream, _, _) => {
+//             let _ = stream.shutdown(Shutdown::Both)?;
+//         }
+//         RequestType::CommandTransfer(stream, _, conn) => {
+//             // Ignore error to be honest, don't care if we try to close twice
+//             let _ = stream.shutdown(Shutdown::Both);
+//             let conn = conn.take();
+//             if let Some(conn) = &conn {
+//                 close_connection_recursive(map_conn_arc.clone(), *conn)?;
+//             }
+//         }
+//         RequestType::PassiveModePort(_, _) => {}
+//     }
+//     Ok(())
+// }
 
 pub struct HandlerWrite {
     connection_token: Token,
@@ -74,10 +75,14 @@ impl HandlerWrite {
         Ok(())
     }
 
+    /// Closes the connection and adds a dummy interest to fire an error
     fn close_connection(&mut self, stream: &mut TcpStream) -> Result<(), Error> {
         stream.shutdown(Shutdown::Both)?;
-        let mut map_conn = self.connection_db.lock().unwrap();
-        map_conn.remove(&self.connection_token);
+        self.actions.push((
+            self.connection_token,
+            self.connection.clone(),
+            Interest::WRITABLE,
+        ));
         Ok(())
     }
 
@@ -89,6 +94,11 @@ impl HandlerWrite {
         waker: &Waker,
     ) -> Result<Option<Box<dyn FnOnce() + Send>>, Error> {
         match request_type {
+            RequestType::Closed(stream) => {
+                let _ = stream.write("Bye...".as_bytes());
+                stream.shutdown(Shutdown::Both)?;
+            }
+
             RequestType::CommandTransfer(stream, to_write, t) => {
                 let maybe_error = stream.flush();
                 if let Err(err) = maybe_error {
@@ -128,9 +138,7 @@ impl HandlerWrite {
                             err
                         );
                         self.close_connection(stream)?;
-                        if let Some(t) = t {
-                            close_connection_recursive(self.connection_db.clone(), *t)?;
-                        }
+                        waker.wake()?;
                     }
                 }
             }
@@ -177,7 +185,6 @@ impl HandlerWrite {
                 self.write_buffer_file_transfer(stream, to_write, waker, cmd_connection_token)
             }
 
-            // TODO Handle chunks!!!!!!
             FileTransferType::FileDownload(file) => {
                 let mut buf = [0; 1024];
                 loop {
@@ -226,6 +233,10 @@ impl HandlerWrite {
                         assert!(read_end == read);
                     }
                 }
+                println!(
+                    "[HANDLE_FILE_TRANSFER] {} - Closing connection file transfer",
+                    self.connection_token.0
+                );
                 let _ = self.close_connection(stream);
                 self.answer_command(
                     cmd_connection_token,

@@ -14,6 +14,9 @@ pub enum Command<'a> {
 
     /// Pointer to string, which indicates the desired folder path
     Retr(&'a Path),
+
+    /// Quit the connection
+    Quit,
 }
 
 fn expects_byte(byte: u8, expected_byte: u8, msg: &'static str) -> Result<(), &'static str> {
@@ -60,6 +63,12 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
         )?;
         // For maximum performance, we are gonna use a trie of matches
         match command[0] {
+            b'Q' => {
+                if command.len() <= 4 || &command[1..4] != b"UIT" {
+                    return Err("Invalid command, did you mean `QUIT`?");
+                }
+                Ok(Command::Quit)
+            }
             // Possible commands = LIST
             b'L' => {
                 if command.len() <= 5 {

@@ -52,7 +52,9 @@ impl HandlerRead {
         file: File,
     ) -> Result<(), Error> {
         match &mut ctx.request_type {
-            RequestType::CommandTransfer(_, _, _) => Err(Error::from(ErrorKind::NotFound)),
+            RequestType::CommandTransfer(_, _, _) | RequestType::Closed(_) => {
+                Err(Error::from(ErrorKind::NotFound))
+            }
             RequestType::FileTransferPassive(_stream, ftt, _)
             | RequestType::FileTransferActive(_stream, ftt, _) => {
                 *ftt = FileTransferType::FileDownload(file);
@@ -71,7 +73,7 @@ impl HandlerRead {
         waker: &Arc<Waker>,
         actions: ActionList,
         next_id: usize,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Box<dyn FnOnce(&mut RequestContext) + Send>>, Error> {
         match request_type {
             RequestType::CommandTransfer(stream, to_write, data_connection) => {
                 let _ = stream.flush();
@@ -114,7 +116,7 @@ impl HandlerRead {
                         self.connection.clone(),
                         Interest::WRITABLE,
                     ));
-                    return Ok(());
+                    return Ok(None);
                 }
 
                 // Get the command
@@ -122,6 +124,23 @@ impl HandlerRead {
                     possible_command.expect("command parse is not an error, this is safe");
 
                 match command {
+                    Command::Quit => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+
+                        to_write.reset_str("221 Service closing control connection.\r\n");
+                        let conn = self.connection.clone();
+                        // to_write.callback_after_sending = Some(Box::new(move || {
+                        //     let connection = conn.lock().unwrap();
+                        //     close
+                        // }));
+                        waker.wake()?;
+                        return Ok(None);
+                    }
+
                     Command::Retr(path) => {
                         self.actions.push((
                             self.connection_token,
@@ -133,7 +152,7 @@ impl HandlerRead {
                                 Response::bad_sequence_of_commands(),
                                 "Bad sequence of commands.",
                             ));
-                            return Ok(());
+                            return Ok(None);
                         }
                         // Example of parsing the path, later on we will need to build
                         // from here
@@ -148,7 +167,7 @@ impl HandlerRead {
                                     Response::file_unavailable(),
                                     "Requested action not taken. File unavailable, no access.",
                                 ));
-                                return Ok(());
+                                return Ok(None);
                             }
                             let file = File::open(path);
                             if let Err(_) = file {
@@ -156,7 +175,7 @@ impl HandlerRead {
                                     Response::file_unavailable(),
                                     "Requested action not taken. File unavailable, file not found.",
                                 ));
-                                return Ok(());
+                                return Ok(None);
                             }
                             let file = file.unwrap();
                             let mut connection_db = self.connection_db.lock().unwrap();
@@ -167,7 +186,7 @@ impl HandlerRead {
                                     Response::file_unavailable(),
                                     "Requested action not taken. File unavailable, no access.",
                                 ));
-                                return Ok(());
+                                return Ok(None);
                             }
                             let data_transfer_conn = data_transfer_conn.unwrap().clone();
                             // Drop mutex because we are gonna do more stuff
@@ -200,7 +219,7 @@ impl HandlerRead {
                                 Response::file_unavailable(),
                                 "Requested action not taken. File unavailable, file not found.",
                             ));
-                            return Ok(());
+                            return Ok(None);
                         }
                     }
 
@@ -218,7 +237,7 @@ impl HandlerRead {
                                 Response::bad_sequence_of_commands(),
                                 "Bad sequence of commands.",
                             ));
-                            return Ok(());
+                            return Ok(None);
                         }
                         // All okay, transition
                         to_write.reset(create_response(
@@ -310,7 +329,7 @@ impl HandlerRead {
                                 Response::bad_sequence_of_commands(),
                                 "Bad sequence of commands.",
                             ));
-                            return Ok(());
+                            return Ok(None);
                         }
 
                         // fill data connection token (so later on the request context command keeps a reference
@@ -330,11 +349,22 @@ impl HandlerRead {
                             ),
                         )));
                         connections.insert(Token(next_id), request_ctx);
-                        return Ok(());
+                        return Ok(None);
+                    }
+
+                    // Test for when the user is logging in
+                    _ => {
+                        let username = "gabivlj";
+                        // todo checking
+                        let user_id = 3;
+                        return Ok(Some(Box::new(move |mut ctx| {
+                            ctx.user_id = Some(user_id);
+                            ctx.loged = false;
+                        })));
                     }
                 }
 
-                Ok(())
+                Ok(None)
             }
 
             RequestType::PassiveModePort(listener, command_conn_ref) => {
@@ -369,7 +399,7 @@ impl HandlerRead {
                 // Just deregister
                 self.actions
                     .push((Token(0), self.connection.clone(), Interest::AIO));
-                Ok(())
+                Ok(None)
             }
 
             _ => unimplemented!("Unimplemented Request type"),

@@ -70,6 +70,7 @@ pub trait TCPImplementation {
     /// Function that will be called when the server needs a new id for the next connection
     fn next_id(&mut self) -> usize;
 }
+
 fn handle_request_type(
     request: &mut RequestContextMutex,
     poll: &Poll,
@@ -78,12 +79,12 @@ fn handle_request_type(
 ) -> Result<(), std::io::Error> {
     let mut r = request.lock().unwrap();
     match &mut r.request_type {
-        RequestType::CommandTransfer(stream, _, _)
+        RequestType::Closed(stream)
+        | RequestType::CommandTransfer(stream, _, _)
         | RequestType::FileTransferActive(stream, _, _)
         | RequestType::FileTransferPassive(stream, _, _) => {
             if interest == Interest::AIO {
                 println!("deregister");
-            // poll.registry().deregister(stream)?;
             } else {
                 poll.registry().reregister(stream, token, interest)?;
             }
@@ -123,17 +124,18 @@ pub fn create_server<T: AsRef<str>>(
             let actions = tcp_implementation.action_list();
             let actions = actions.lock();
             if let Ok(mut actions) = actions {
-                for (token, mut request, type_action) in actions.drain(0..) {
+                for (token, mut request, type_action) in actions.drain(..) {
                     handle_request_type(&mut request, &poll, type_action, token)?;
                 }
             }
         }
+
         // Poll Mio for events, blocking until we get an event.
         poll.poll(&mut events, None)?;
 
         // Process each event.
         for event in events.iter() {
-            if event.is_error() || event.is_read_closed() {
+            if event.is_error() || event.is_read_closed() || event.is_write_closed() {
                 let _ = tcp_implementation.close_connection(&poll, event.token());
                 continue;
             }
@@ -146,7 +148,7 @@ pub fn create_server<T: AsRef<str>>(
                     loop {
                         match server.accept() {
                             Ok((stream, _addr)) => {
-                                if let Err(err) = tcp_implementation.new_connection(
+                                if let Err(_) = tcp_implementation.new_connection(
                                     SERVER,
                                     Token(id),
                                     &poll,

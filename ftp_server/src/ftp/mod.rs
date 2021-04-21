@@ -9,13 +9,11 @@ mod command;
 mod handler_read;
 mod handler_write;
 mod response;
-use command::Command;
 use response::Response;
 
 // use handlers::write_buffer_file_transfer;
 use mio::net::{TcpListener, TcpStream};
 use mio::{event::Event, Interest, Poll, Token, Waker};
-use std::convert::TryFrom;
 use std::io::{Error, ErrorKind};
 use std::net::Shutdown;
 use std::sync::{Arc, Mutex};
@@ -23,10 +21,7 @@ use std::thread::spawn;
 
 use crate::tcp::TCPImplementation;
 
-use self::{
-    handler_read::HandlerRead,
-    handler_write::{close_connection_recursive, HandlerWrite},
-};
+use self::{handler_read::HandlerRead, handler_write::HandlerWrite};
 
 fn get_test_html(data: &str) -> Vec<u8> {
     return format!(
@@ -104,6 +99,9 @@ pub enum FileTransferType {
 // TODO: Create user struct and all of that logic so we can keep a reference to a user in the request_context
 // #[derive(Debug)]
 pub enum RequestType {
+    /// This request_type is only when we are instantly closing the connection after accepting it
+    Closed(TcpStream),
+
     /// This requesst is a file transfer on passive mode.
 
     /// Also the token is for referencing the `CommandTransfer` req_ctx connection
@@ -127,13 +125,21 @@ pub enum RequestType {
 
 pub struct RequestContext {
     pub request_type: RequestType,
+
+    user_id: Option<usize>,
+
+    loged: bool,
     // (note): would be cool to have here the user_id reference when creating the user
     // socket_addr: SocketAddr,
 }
 
 impl RequestContext {
     fn new(request_type: RequestType) -> Self {
-        Self { request_type }
+        Self {
+            request_type,
+            user_id: None,
+            loged: false,
+        }
     }
 }
 
@@ -150,6 +156,12 @@ pub struct FTPServer {
     actions: ActionList,
     current_id: usize,
     port: usize,
+
+    // Maximum connections
+    max_connections: usize,
+
+    // Current connections
+    current_connections: usize,
 }
 
 pub const ROOT: &'static str = "./root";
@@ -163,6 +175,22 @@ impl FTPServer {
             connections: Arc::new(Mutex::new(HashMap::new())),
             current_id: 0,
             port: 50_000,
+            max_connections: 50,
+            current_connections: 0,
+            actions: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn with_connection_capacity(max_connections: usize) -> Self {
+        if !Path::new(ROOT).exists() {
+            fs::create_dir(ROOT).expect("root dir hasn't been created");
+        }
+        Self {
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            current_id: 0,
+            port: 50_000,
+            max_connections,
+            current_connections: 0,
             actions: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -215,20 +243,27 @@ impl FTPServer {
             RequestType::PassiveModePort(port, _) => {
                 poll.registry().deregister(port)?;
             }
+
+            RequestType::Closed(stream) => {
+                poll.registry().deregister(stream)?;
+            }
         }
         Ok(())
     }
 
-    fn deregister_and_shutdown(&self, poll: &Poll, rc: &mut RequestContext) -> Result<(), Error> {
-        let _ = self.deregister(poll, rc);
+    fn shutdown(rc: &mut RequestContext) -> Result<(), Error> {
         match &mut rc.request_type {
+            RequestType::Closed(stream) => {
+                let _ = stream.flush();
+                stream.shutdown(Shutdown::Both)?;
+            }
             RequestType::CommandTransfer(stream, _, _) => {
-                stream.flush();
+                let _ = stream.flush();
                 stream.shutdown(Shutdown::Both)?;
             }
 
             RequestType::FileTransferActive(stream, _, _) => {
-                stream.flush();
+                let _ = stream.flush();
                 stream.shutdown(Shutdown::Both)?;
             }
 
@@ -238,6 +273,12 @@ impl FTPServer {
 
             RequestType::PassiveModePort(port, _) => {}
         }
+        Ok(())
+    }
+
+    fn deregister_and_shutdown(&self, poll: &Poll, rc: &mut RequestContext) -> Result<(), Error> {
+        let _ = self.deregister(poll, rc);
+        FTPServer::shutdown(rc)?;
         Ok(())
     }
 }
@@ -259,7 +300,22 @@ impl TCPImplementation for FTPServer {
         poll: &Poll,
         mut stream: TcpStream,
     ) -> Result<(), std::io::Error> {
-        println!("new connection!");
+        println!(
+            "[NEW_CONNECTION] {} - There is a brand new connection - Current connections: {} ",
+            token.0,
+            self.current_connections + 1
+        );
+        if self.max_connections <= self.current_connections {
+            println!(
+                "[NEW_CONNECTION] {} - Closing connection because it surpasses the maximum connections",
+                token.0
+            );
+            poll.registry()
+                .register(&mut stream, token, Interest::WRITABLE)?;
+            self.add_connection(token, RequestType::Closed(stream));
+            return Ok(());
+        }
+        self.current_connections += 1;
         poll.registry()
             .register(&mut stream, token, Interest::WRITABLE)?;
         self.add_connection(
@@ -354,45 +410,47 @@ impl TCPImplementation for FTPServer {
                 next_id,
             );
             let is_err = response.is_err();
-
-            // If it's a definitive error
-            let is_would_block =
-                is_err && response.as_ref().unwrap_err().kind() == ErrorKind::WouldBlock;
+            let mut is_would_block = false;
+            if let Err(err) = response.as_ref() {
+                is_would_block = err.kind() == ErrorKind::WouldBlock;
+            }
             let is_error_for_closing_connection = is_err && !is_would_block;
             if is_would_block {
-                fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open("./debug.txt")
-                    .unwrap()
-                    .write(
-                        format!(
-                            "{:?} {:?}\n",
-                            response,
-                            handler_read
-                                .actions
-                                .iter()
-                                .map(|e| e.2)
-                                .collect::<Vec<Interest>>()
+                if let Err(err) = response {
+                    fs::OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open("./debug.txt")
+                        .unwrap()
+                        .write(
+                            format!(
+                                "{:?} {:?}\n",
+                                err,
+                                handler_read
+                                    .actions
+                                    .iter()
+                                    .map(|e| e.2)
+                                    .collect::<Vec<Interest>>()
+                            )
+                            .as_bytes(),
                         )
-                        .as_bytes(),
-                    )
-                    .unwrap();
-            }
-            // TODO There is something strange when there is would block error,
-            // ?? Investigate
-            if is_error_for_closing_connection {
-                println!(
-                    "[READ_CONNECTION] - {} - Closing connection because error, {}",
-                    token.0,
-                    response.unwrap_err()
-                );
-                drop(connection_mutex);
-                let _ = close_connection_recursive(
-                    handler_read.connection_db.clone(),
-                    handler_read.connection_token,
-                );
-                let _ = waker.wake();
+                        .unwrap();
+                }
+            } else if is_error_for_closing_connection {
+                if let Err(err) = response {
+                    println!(
+                        "[READ_CONNECTION] - {} - Closing connection because error, {}",
+                        token.0, err
+                    );
+                    let _ = FTPServer::shutdown(&mut connection_mutex);
+                    drop(connection_mutex);
+                    // let _ = close_connection_recursive(
+                    //     handler_read.connection_db.clone(),
+                    //     handler_read.connection_token,
+                    // );
+
+                    let _ = waker.wake();
+                }
             } else if is_would_block {
                 drop(connection_mutex);
                 println!("[READ_CONNECTION] - {} - Would block", token.0);
@@ -408,6 +466,13 @@ impl TCPImplementation for FTPServer {
                 let _ = waker.wake();
                 drop(actions);
             } else {
+                let callback = response.unwrap();
+                // This means that the function needs to do additional stuff inside the `request_context`,
+                // not the `request_type`
+                if let Some(callback) = callback {
+                    callback(&mut connection_mutex);
+                }
+                // Finally drop the mutex
                 drop(connection_mutex);
                 println!("[READ_CONNECTION] - {} - Adding actions", token.0);
                 let mut actions = actions.lock().unwrap();
@@ -422,6 +487,8 @@ impl TCPImplementation for FTPServer {
         Ok(())
     }
 
+    /// This function should be called for almost every disconnection
+    /// to do a proper cleanup everytime of every connection.
     fn close_connection(&mut self, poll: &Poll, token: Token) -> Result<(), Error> {
         println!("[CLOSE_CONNECTION] - {} - Closing connection", token.0);
         let map_conn_arc = self.connections.clone();
@@ -435,19 +502,41 @@ impl TCPImplementation for FTPServer {
             arc
         };
         drop(map_conn);
-        self.connections.lock().unwrap().remove(&token);
-
         let mut conn = conn.lock().unwrap();
+        if let Some(_) = self.connections.lock().unwrap().remove(&token) {
+            println!("[CLOSE_CONNECTION] Successfully removing the connection.");
+            if let RequestType::CommandTransfer(_, _, _) = &conn.request_type {
+                self.current_connections -= 1;
+            }
+            println!(
+                "[CLOSE_CONNECTION] Current control connections - {}",
+                self.current_connections
+            );
+        }
+        println!(
+            "[CLOSE_CONNECTION] Current overall connections - {}",
+            self.connections.lock().unwrap().len()
+        );
         match &mut conn.request_type {
-            RequestType::FileTransferActive(stream, _, _)
-            | RequestType::FileTransferPassive(stream, _, _) => {
+            RequestType::Closed(stream) => {
                 poll.registry().deregister(stream)?;
                 stream.flush();
                 stream.shutdown(Shutdown::Both)?;
                 println!(
+                    "[CLOSE_CONNECTION] - {} - Closing connection because maximum connections reached",
+                    token.0
+                );
+            }
+
+            RequestType::FileTransferActive(stream, _, _)
+            | RequestType::FileTransferPassive(stream, _, _) => {
+                println!(
                     "[CLOSE_CONNECTION] - {} - Closing connection FTA or FTP",
                     token.0
                 );
+                poll.registry().deregister(stream)?;
+                stream.flush();
+                stream.shutdown(Shutdown::Both)?;
             }
             RequestType::CommandTransfer(stream, _, conn) => {
                 println!(
@@ -629,7 +718,7 @@ mod ftp_server_testing {
         }
     }
 
-    #[test]
+    // #[test]
     fn it_works3() {
         for _ in 0..100 {
             let result = TcpStream::connect("127.0.0.1:8080");
