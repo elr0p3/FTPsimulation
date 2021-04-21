@@ -13,3 +13,6 @@ chrono = "0.4.19"
 
 [dependencies.mio]
 features = ["os-poll", "net"]
+
+[dependencies.user_manage]
+path = "../user_manage"
