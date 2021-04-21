@@ -9,6 +9,7 @@ mod command;
 mod handler_read;
 mod handler_write;
 mod response;
+mod user_manage;
 use response::Response;
 
 // use handlers::write_buffer_file_transfer;
