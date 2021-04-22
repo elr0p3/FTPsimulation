@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use std::{
     collections::HashMap,
@@ -6,7 +6,7 @@ use std::{
     fs::OpenOptions,
     fs::{self, File},
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 pub const USER_PATH: &'static str = "./etc/users.json";
@@ -24,32 +24,44 @@ pub struct User {
 }
 
 impl User {
-
     pub fn new(username: &str, passwd: &str, uid: u16) -> Self {
-        let chroot = "/home/".to_string() + username;
+        let _ = fs::create_dir(format!("./home/{}", username));
+        let chroot = "./home/".to_string() + username;
         Self {
             passwd: passwd.to_string(),
             chroot: chroot.clone(),
             uid,
-            actual_dir: chroot,
+            actual_dir: "./".to_string(),
         }
     }
 
+    pub fn are_equal_paths(&mut self, path: &str) -> bool {
+        return self.total_path() == Path::new(path).canonicalize().unwrap();
+    }
+
     pub fn change_dir(&mut self, new_dir: &str) -> Result<(), &'static str> {
-        // we should use
-        // std::env::set_current_dir("./root").unwrap();
-
-        let mut temp_dir = String::new();
-
-        if new_dir.starts_with("/") {
-            temp_dir = ".".to_string() + new_dir;
-        }
-
-        if Path::new(&temp_dir).exists() {
-            self.actual_dir = temp_dir;
+        // Get root
+        let root = Path::new(&self.chroot);
+        // Get total path root
+        let expected_root = root.canonicalize().unwrap();
+        // Path buffer to build directory
+        let mut path_buf: PathBuf = PathBuf::new();
+        path_buf.push(&self.actual_dir);
+        path_buf.push(new_dir);
+        // Final path making sure it's not absolute
+        let final_path = format!("./{}", path_buf.to_str().unwrap());
+        // Join with root
+        let path = root.join(final_path.clone());
+        // Get total path
+        let total_path = path.canonicalize().map_err(|_| "Directory not found")?;
+        // Check if it's valid (doesn't exit the chroot)
+        let valid_dir = total_path.starts_with(&expected_root);
+        if valid_dir {
+            // If it's actually valid set it to actual directory
+            self.actual_dir = final_path;
             Ok(())
         } else {
-            Err("Directony doesn't exist")
+            Err("Invalid directory")
         }
     }
 
@@ -63,6 +75,14 @@ impl User {
 
     pub fn get_chroot(&self) -> &String {
         &self.chroot
+    }
+
+    // Gets the total path of the user (in the system)
+    pub fn total_path(&self) -> PathBuf {
+        Path::new(&self.chroot)
+            .join(&self.actual_dir)
+            .canonicalize()
+            .unwrap()
     }
 
     pub fn get_uid(&self) -> u16 {
@@ -154,13 +174,15 @@ impl SystemUsers {
             &self.log_file,
             "[{:?}] Looking for USER {}, PASS *****",
             time, user_name
-        ).unwrap();
+        )
+        .unwrap();
         if let Some(_) = self.users_data.get(user_name) {
             writeln!(
                 &self.log_file,
                 "[{:?}] User '{}' already exists",
                 time, user_name
-            ).unwrap();
+            )
+            .unwrap();
             return Err("User already exists");
         }
 
@@ -181,7 +203,8 @@ impl SystemUsers {
             &self.log_file,
             "[{:?}] User '{}' has been created and stored",
             time, user_name
-        ).unwrap();
+        )
+        .unwrap();
 
         Ok(())
     }
@@ -192,7 +215,8 @@ impl SystemUsers {
             &self.log_file,
             "[{:?}] Looking for USER {}, PASS *****",
             time, user_name
-        ).unwrap();
+        )
+        .unwrap();
 
         if let Some(user_content) = self.users_data.get(user_name) {
             if !user_content.has_passwd(passwd) {
@@ -200,7 +224,8 @@ impl SystemUsers {
                     &self.log_file,
                     "[{:?}] Invalid password for USER {}",
                     time, user_name
-                ).unwrap();
+                )
+                .unwrap();
 
                 return Err("Invalid password");
             }
@@ -209,7 +234,8 @@ impl SystemUsers {
                 &self.log_file,
                 "[{:?}] User '{}' has been deleted",
                 time, user_name
-            ).unwrap();
+            )
+            .unwrap();
 
             let user = self.users_data.remove(user_name).unwrap();
             self.serialize_users().unwrap();
@@ -219,8 +245,9 @@ impl SystemUsers {
                 &self.log_file,
                 "[{:?}] User '{}' do not exists",
                 time, user_name
-            ).unwrap();
-            
+            )
+            .unwrap();
+
             Err("User do not exists")
         }
     }
@@ -236,52 +263,90 @@ impl SystemUsers {
 mod system_users_test {
 
     use super::{SystemUsers, USER_PATH};
-// #[test]
-// fn check_exist () {
-// let user_list = SystemUsers::load_data(USER_PATH).unwrap();
-// assert!(user_list.user_exists("admin"));
-// }
+    // #[test]
+    // fn check_exist () {
+    // let user_list = SystemUsers::load_data(USER_PATH).unwrap();
+    // assert!(user_list.user_exists("admin"));
+    // }
 
-// #[test]
-// fn look_for_passwords () {
-// let user_list = SystemUsers::load_data(USER_PATH).unwrap();
-// assert!(user_list.has_passwd("admin", "admin"));
-// }
+    // #[test]
+    // fn look_for_passwords () {
+    // let user_list = SystemUsers::load_data(USER_PATH).unwrap();
+    // assert!(user_list.has_passwd("admin", "admin"));
+    // }
 
-// #[test]
-// fn concurrent_modif () {
-// // cargo t concurrent_modif -- --nocapture
-// use std::sync::{Arc, Mutex};
-// use std::thread;
+    // #[test]
+    // fn concurrent_modif () {
+    // // cargo t concurrent_modif -- --nocapture
+    // use std::sync::{Arc, Mutex};
+    // use std::thread;
 
-// let user_list = SystemUsers::load_data(USER_PATH).unwrap();
-// let user_list = Arc::new(Mutex::new(user_list));
-// let mut handles = vec![];
-// let users_names = ["admin", "root", "anonymous", "user", "marikong"];
+    // let user_list = SystemUsers::load_data(USER_PATH).unwrap();
+    // let user_list = Arc::new(Mutex::new(user_list));
+    // let mut handles = vec![];
+    // let users_names = ["admin", "root", "anonymous", "user", "marikong"];
 
-// for i in 0..5 {
-// let cloned = Arc::clone(&user_list);
-// let handle = thread::spawn(move|| {
-// let mut users_shared = cloned.lock().unwrap();
-// let user = users_shared.get_user(users_names[i]).unwrap();
-// // user.change_dir("/src").unwrap();
-// println!("{} - {:#?}", i, user);
-// });
+    // for i in 0..5 {
+    // let cloned = Arc::clone(&user_list);
+    // let handle = thread::spawn(move|| {
+    // let mut users_shared = cloned.lock().unwrap();
+    // let user = users_shared.get_user(users_names[i]).unwrap();
+    // // user.change_dir("/src").unwrap();
+    // println!("{} - {:#?}", i, user);
+    // });
 
-// handles.push(handle);
-// }
+    // handles.push(handle);
+    // }
 
-// for handle in handles {
-// handle.join().unwrap();
-// }
+    // for handle in handles {
+    // handle.join().unwrap();
+    // }
 
-// println!("{:#?}", user_list);
+    // println!("{:#?}", user_list);
 
-// }
+    // }
+
+    #[test]
+    fn check_paths() {
+        let new_user_name = "qwerty2";
+        let new_user_passwd = new_user_name;
+        let mut sys_users = SystemUsers::load_data(USER_PATH).unwrap();
+        let create = sys_users.create_user(new_user_name, new_user_passwd);
+        assert!(create.is_ok());
+        let user = sys_users.get_user_mut(new_user_name).expect("to work");
+        user.change_dir("./thing")
+            .expect_err("Expect this an error");
+        assert!(user.are_equal_paths("./home/qwerty2"));
+        user.change_dir("..")
+            .expect_err("Expected this to be an error");
+        assert!(user.are_equal_paths("./home/qwerty2"));
+        user.change_dir("/thing3/thing4")
+            .expect("expect this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2/thing3/thing4"));
+        user.change_dir("../").expect("Expected this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2/thing3"));
+        user.change_dir("..").expect("Expected this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2"));
+        user.change_dir("./thing3").expect("Expected this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2/thing3"));
+        user.change_dir("./thing4").expect("Expected this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2/thing3/thing4"));
+        user.change_dir("/thing2").expect("Expected this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2/thing2"));
+        user.change_dir("/thing3/thing4")
+            .expect("Expected this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2/thing3/thing4"));
+        user.change_dir("/").expect("Expected this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2"));
+        assert!(user.are_equal_paths("./home/qwerty2//././././././//./"));
+        user.change_dir("./thing3").expect("Expected this to be ok");
+        assert!(user.are_equal_paths("./home/qwerty2//././././././//./thing3/thing4/.."));
+        assert!(!user.are_equal_paths("./home/qwerty2//././././././//./thing3/thing4/./."));
+    }
 
     // cargo t create_delete_user -- --nocapture
     #[test]
-    fn create_delete_user () {
+    fn create_delete_user() {
         let new_user_name = "qwerty";
         let new_user_passwd = new_user_name;
         let mut sys_users = SystemUsers::load_data(USER_PATH).unwrap();
@@ -291,7 +356,6 @@ mod system_users_test {
 
         let fail_create = sys_users.create_user(new_user_name, new_user_passwd);
         assert!(fail_create.is_err());
-
 
         let deleted = sys_users.delete_user(new_user_name, new_user_passwd);
         assert!(deleted.is_ok());

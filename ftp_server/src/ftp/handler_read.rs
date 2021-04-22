@@ -1,10 +1,9 @@
 use super::{command::Command, response::Response, FileTransferType};
 use super::{
-    create_response, Action, ActionList, BufferToWrite, HashMutex, RequestContext,
+    create_response, Action, ActionList, BufferToWrite, FTPServer, HashMutex, RequestContext,
     RequestContextMutex, RequestType, Token, ROOT,
 };
 use mio::{net::TcpStream, Interest, Waker};
-use std::io::{Error, Write};
 use std::{
     convert::TryFrom,
     path::Path,
@@ -13,6 +12,10 @@ use std::{
 use std::{
     fs::File,
     io::{ErrorKind, Read},
+};
+use std::{
+    io::{Error, Write},
+    net::Shutdown,
 };
 
 pub struct HandlerRead {
@@ -133,10 +136,14 @@ impl HandlerRead {
 
                         to_write.reset_str("221 Service closing control connection.\r\n");
                         let conn = self.connection.clone();
-                        // to_write.callback_after_sending = Some(Box::new(move || {
-                        //     let connection = conn.lock().unwrap();
-                        //     close
-                        // }));
+                        to_write.callback_after_sending = Some(Box::new(move || {
+                            let connection = conn.lock().unwrap();
+                            if let RequestType::CommandTransfer(stream, _, _) =
+                                &connection.request_type
+                            {
+                                let _ = stream.shutdown(Shutdown::Both);
+                            }
+                        }));
                         waker.wake()?;
                         return Ok(None);
                     }
@@ -154,6 +161,7 @@ impl HandlerRead {
                             ));
                             return Ok(None);
                         }
+
                         // Example of parsing the path, later on we will need to build
                         // from here
                         let base = format!("{}/{}", ROOT, "username");
@@ -374,10 +382,6 @@ impl HandlerRead {
                 // Get the token for the connection
                 let token_for_connection = Token(next_id);
 
-                // Register the connection as writable/readable
-                // TODO Note that we need to put in passivemodeport the field of which kind of connection is this
-                // (Download, Upload, Just Buffer Transfer...)
-
                 // Add the connection
                 let mut connection_db = self.connection_db.lock().unwrap();
                 let shared_request_ctx = Arc::new(Mutex::new(RequestContext::new(
@@ -390,15 +394,25 @@ impl HandlerRead {
 
                 connection_db.insert(token_for_connection, shared_request_ctx.clone());
 
-                self.actions
-                    .push((token_for_connection, shared_request_ctx, Interest::WRITABLE));
-
-                // Remove the listener (won't accept more connections)
                 connection_db.remove(&self.connection_token);
+                let cmd_connection = connection_db.get_mut(command_conn_ref);
 
-                // Just deregister
-                self.actions
-                    .push((Token(0), self.connection.clone(), Interest::AIO));
+                if let Some(cmd_connection) = cmd_connection {
+                    let command_conn_arc = cmd_connection.clone();
+                    if let RequestType::CommandTransfer(_stream, buff, f) =
+                        &mut cmd_connection.lock().unwrap().request_type
+                    {
+                        *f = Some(Token(next_id));
+                        buff.reset(create_response(Response::command_okay(), "Command okay."));
+                        self.actions
+                            .push((*command_conn_ref, command_conn_arc, Interest::WRITABLE))
+                    }
+                } else {
+                    return Ok(None);
+                }
+                connection_db.insert(token_for_connection, shared_request_ctx.clone());
+                // Remove the listener (won't accept more connections)
+
                 Ok(None)
             }
 

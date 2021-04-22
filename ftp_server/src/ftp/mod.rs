@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{Read, Write},
+    io::Write,
     path::Path,
 };
 
@@ -9,8 +9,8 @@ mod command;
 mod handler_read;
 mod handler_write;
 mod response;
-mod user_manage;
 use response::Response;
+use user_manage::SystemUsers;
 
 // use handlers::write_buffer_file_transfer;
 use mio::net::{TcpListener, TcpStream};
@@ -163,6 +163,7 @@ pub struct FTPServer {
 
     // Current connections
     current_connections: usize,
+    // user_repository: SystemUsers,
 }
 
 pub const ROOT: &'static str = "./root";
@@ -179,6 +180,7 @@ impl FTPServer {
             max_connections: 50,
             current_connections: 0,
             actions: Arc::new(Mutex::new(Vec::new())),
+            // user_repository: SystemUsers::load_data("./users.txt").expect("didn't work"),
         }
     }
 
@@ -193,6 +195,7 @@ impl FTPServer {
             max_connections,
             current_connections: 0,
             actions: Arc::new(Mutex::new(Vec::new())),
+            // user_repository: SystemUsers::load_data("./users.txt").expect("didn't work"),
         }
     }
 
@@ -719,7 +722,7 @@ mod ftp_server_testing {
         }
     }
 
-    // #[test]
+    #[test]
     fn it_works3() {
         for _ in 0..100 {
             let result = TcpStream::connect("127.0.0.1:8080");
@@ -745,7 +748,6 @@ mod ftp_server_testing {
             });
 
             expect_response(&mut stream, "200 Command okay.\r\n");
-
             stream
                 .write_all(&"LIST\r\n".as_bytes())
                 .expect("writing everything");
@@ -755,29 +757,12 @@ mod ftp_server_testing {
             );
 
             expect_response(&mut stream, "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n");
+            stream
+                .write_all(&"QUIT\r\n".as_bytes())
+                .expect("writing everything");
+            expect_response(&mut stream, "221 Service closing control connection.\r\n");
             join.join().unwrap();
             std::thread::sleep(Duration::from_millis(20));
-            // let srv = TcpListener::bind("127.0.0.1:2233").expect("to create server");
-            // stream
-            //     .write_all(&"PORT 127,0,0,1,8,185\r\n".as_bytes())
-            //     .expect("writing everything");
-            //     let join = std::thread::spawn(move || {
-            //         let (mut conn, _) = srv.accept().expect("expect to receive connection");
-            //         let mut buff = [0; 1024];
-            //         let read = conn.read(&mut buff).expect("to have read");
-            //         let expected = "Hello world!";
-            //         assert_eq!(read, expected.len());
-            //         assert_eq!(std::str::from_utf8(&buff[..read]).unwrap(), expected);
-            //         let possible_err = conn.read(&mut buff);
-            //         assert!(possible_err.unwrap() == 0);
-            //     });
-            //     expect_response(&mut stream, "200 Command okay.\r\n");
-            //     stream
-            //         .write_all(&"RETR ./testfile.txt\r\n".as_bytes())
-            //         .expect("writing everything");
-            //     expect_response(&mut stream, "150 File download starts!\r\n");
-            //     join.join().unwrap();
-            //     std::thread::sleep(Duration::from_millis(20));
         }
     }
 

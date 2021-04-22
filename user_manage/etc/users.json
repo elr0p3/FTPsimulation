@@ -1,4 +1,9 @@
 {
+  "anonymous": {
+    "passwd": "",
+    "chroot": "/home/anonymous",
+    "uid": 2
+  },
   "admin": {
     "passwd": "admin",
     "chroot": "/home/admin",
@@ -9,19 +14,14 @@
     "chroot": "/home/user",
     "uid": 3
   },
-  "root": {
-    "passwd": "toor",
-    "chroot": "/root",
-    "uid": 1
-  },
-  "anonymous": {
-    "passwd": "",
-    "chroot": "/home/anonymous",
-    "uid": 2
-  },
   "marikong": {
     "passwd": "marikong",
     "chroot": "/home/marikong",
     "uid": 4
+  },
+  "root": {
+    "passwd": "toor",
+    "chroot": "/root",
+    "uid": 1
   }
 }
