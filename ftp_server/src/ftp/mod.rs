@@ -127,7 +127,7 @@ pub enum RequestType {
 pub struct RequestContext {
     pub request_type: RequestType,
 
-    user_id: Option<usize>,
+    user_id: Option<String>,
 
     loged: bool,
     // (note): would be cool to have here the user_id reference when creating the user
@@ -154,8 +154,11 @@ type HashMutex<K, V> = Arc<Mutex<HashMap<K, V>>>;
 
 pub struct FTPServer {
     connections: HashMutex<Token, RequestContextMutex>,
+
     actions: ActionList,
+
     current_id: usize,
+
     port: usize,
 
     // Maximum connections
@@ -163,7 +166,8 @@ pub struct FTPServer {
 
     // Current connections
     current_connections: usize,
-    // user_repository: SystemUsers,
+
+    user_repository: Arc<Mutex<SystemUsers>>,
 }
 
 pub const ROOT: &'static str = "./root";
@@ -180,7 +184,9 @@ impl FTPServer {
             max_connections: 50,
             current_connections: 0,
             actions: Arc::new(Mutex::new(Vec::new())),
-            // user_repository: SystemUsers::load_data("./users.txt").expect("didn't work"),
+            user_repository: Arc::new(Mutex::new(
+                SystemUsers::load_data("./etc/users.json").expect("didn't work"),
+            )),
         }
     }
 
@@ -195,7 +201,9 @@ impl FTPServer {
             max_connections,
             current_connections: 0,
             actions: Arc::new(Mutex::new(Vec::new())),
-            // user_repository: SystemUsers::load_data("./users.txt").expect("didn't work"),
+            user_repository: Arc::new(Mutex::new(
+                SystemUsers::load_data("./etc/users.json").expect("didn't work"),
+            )),
         }
     }
 
@@ -400,8 +408,18 @@ impl TCPImplementation for FTPServer {
         };
         let token = event.token();
         drop(map_conn);
-        self.deregister(poll, &mut conn.lock().unwrap())?;
-        let mut handler_read = HandlerRead::new(token, self.connections.clone(), conn.clone());
+        let mut handler_read = {
+            let conn_ref = &mut conn.lock().unwrap();
+            self.deregister(poll, conn_ref)?;
+            HandlerRead::new(
+                token,
+                self.connections.clone(),
+                conn.clone(),
+                self.user_repository.clone(),
+                conn_ref.user_id.clone(),
+                conn_ref.loged,
+            )
+        };
         let actions = self.action_list();
         let next_id = self.next_id();
         spawn(move || {
@@ -448,11 +466,6 @@ impl TCPImplementation for FTPServer {
                     );
                     let _ = FTPServer::shutdown(&mut connection_mutex);
                     drop(connection_mutex);
-                    // let _ = close_connection_recursive(
-                    //     handler_read.connection_db.clone(),
-                    //     handler_read.connection_token,
-                    // );
-
                     let _ = waker.wake();
                 }
             } else if is_would_block {
@@ -539,7 +552,7 @@ impl TCPImplementation for FTPServer {
                     token.0
                 );
                 poll.registry().deregister(stream)?;
-                stream.flush();
+                let _ = stream.flush();
                 stream.shutdown(Shutdown::Both)?;
             }
             RequestType::CommandTransfer(stream, _, conn) => {
@@ -549,7 +562,7 @@ impl TCPImplementation for FTPServer {
                 );
                 // Ignore error to be honest, don't care if we try to close twice
                 let _ = poll.registry().deregister(stream);
-                stream.flush();
+                let _ = stream.flush();
                 let _ = stream.shutdown(Shutdown::Both);
                 let conn = conn.take();
                 if let Some(conn) = &conn {
@@ -596,6 +609,17 @@ mod ftp_server_testing {
         assert_eq!(response_expects, str);
     }
 
+    fn log_in(stream: &mut TcpStream, username: &str, password: &str) {
+        stream
+            .write_all(&format!("USER {}\r\n", username).as_bytes())
+            .expect("user login didn't work");
+        expect_response(stream, "331 User name okay, need password.\r\n");
+        stream
+            .write_all(&format!("PASS {}\r\n", password).as_bytes())
+            .expect("user login didn't work");
+        expect_response(stream, "230 User logged in, proceed.\r\n");
+    }
+
     #[test]
     fn it_works() {
         for _ in 0..100 {
@@ -605,6 +629,7 @@ mod ftp_server_testing {
             }
             let mut stream = result.unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
+            log_in(&mut stream, "user_01", "123456");
             let srv = TcpListener::bind("127.0.0.1:2234").expect("to create server");
             // println!("expect writing everything");
             stream
@@ -669,6 +694,7 @@ mod ftp_server_testing {
             }
             let mut stream = result.unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
+            log_in(&mut stream, "user_test_it_works_2", "123456");
             let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
             stream
                 .write_all(&"PORT 127,0,0,1,8,187\r\n".as_bytes())
@@ -731,6 +757,7 @@ mod ftp_server_testing {
             }
             let mut stream = result.unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
+            log_in(&mut stream, "user_test_it_works_3", "123456");
             let srv = TcpListener::bind("127.0.0.1:2232").expect("to create server");
             stream
                 .write_all(&"PORT 127,0,0,1,8,184\r\n".as_bytes())
@@ -746,7 +773,6 @@ mod ftp_server_testing {
                 let possible_err = conn.read(&mut buff);
                 assert!(possible_err.unwrap() == 0);
             });
-
             expect_response(&mut stream, "200 Command okay.\r\n");
             stream
                 .write_all(&"LIST\r\n".as_bytes())
@@ -774,6 +800,7 @@ mod ftp_server_testing {
         }
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_test_image_transfer", "123456");
         let srv = TcpListener::bind("127.0.0.1:2233").expect("to create server");
         stream
             .write_all(&"PORT 127,0,0,1,8,185\r\n".as_bytes())

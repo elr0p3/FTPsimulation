@@ -15,8 +15,25 @@ pub enum Command<'a> {
     /// Pointer to string, which indicates the desired folder path
     Retr(&'a Path),
 
+    User(&'a str),
+
+    Password(&'a str),
+
+    // PASV\r\n
+    Passive,
+
     /// Quit the connection
     Quit,
+}
+
+impl<'a> Command<'a> {
+    /// Returns if this command needs authentication in the FTP protocol
+    pub fn is_auth_command(&self) -> bool {
+        match self {
+            Command::Port(_, _) | Command::List(_) | Command::Retr(_) => true,
+            _ => false,
+        }
+    }
 }
 
 fn expects_byte(byte: u8, expected_byte: u8, msg: &'static str) -> Result<(), &'static str> {
@@ -61,7 +78,10 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
             b'\r',
             "All commands should finish with slash r slash n",
         )?;
+
         // For maximum performance, we are gonna use a trie of matches
+        // This is also done in compilers with switch statements, where they create
+        // a trie of switches where they check if the word is a keyword.
         match command[0] {
             b'Q' => {
                 if command.len() <= 4 || &command[1..4] != b"UIT" {
@@ -69,6 +89,7 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
                 }
                 Ok(Command::Quit)
             }
+
             // Possible commands = LIST
             b'L' => {
                 if command.len() <= 5 {
@@ -112,49 +133,86 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
             }
 
             b'P' => {
+                match command[1] {
+                    b'A' => match command[2] {
+                        b'S' => match command[3] {
+                            b'V' => {
+                                if command.len() != 6 {
+                                    return Err("Bad command length");
+                                }
+                                return Ok(Command::Passive);
+                            }
+                            b'S' => {
+                                expects_byte(command[4], b' ', "Expected a space in between")?;
+                                let password = std::str::from_utf8(&command[5..command.len() - 2])
+                                    .map_err(|_| "Expected ASCII compliant username")?;
+                                return Ok(Command::Password(password));
+                            }
+                            _ => return Err("Unknown command, maybe you meant 'PASS' or 'PASV'"),
+                        },
+                        _ => return Err("Unknown command, maybe you meant 'PASS' or 'PASV'"),
+                    },
+
+                    b'O' => {
+                        if command.len() <= 6 {
+                            return Err("invalid command length");
+                        }
+                        if &command[2..4] != b"RT" {
+                            return Err("Invalid command, maybe you meant: `PORT`?");
+                        }
+                        expects_byte(
+                            command[4],
+                            b' ',
+                            "Expected space in between command and the rest.",
+                        )?;
+
+                        let mut ip_addr = [0u8; 4];
+                        let mut port = [0u8; 2];
+                        let mut byte_idx = 5;
+
+                        // Parse IP + port
+                        for i in 0..6 {
+                            let prev = byte_idx;
+                            while byte_idx < command.len() - 2 && command[byte_idx] != b',' {
+                                byte_idx += 1;
+                            }
+                            if i >= 4 {
+                                port[i - 4] = ascii_to_u8(&command[prev..byte_idx])
+                                    .ok_or("Invalid port number")?;
+                            } else {
+                                ip_addr[i] = ascii_to_u8(&command[prev..byte_idx])
+                                    .ok_or("Invalid IPv4 address")?;
+                            }
+                            byte_idx += 1;
+                        }
+
+                        // Check we reached the end of the command
+                        if byte_idx != command.len() - 1 {
+                            return Err("Bad format of the `PORT` command");
+                        }
+
+                        // Try to get the IPv4
+                        let ip = Ipv4Addr::from(ip_addr);
+
+                        // This is the formula for getting the port number
+                        let port: u16 = port[0] as u16 * 256 + port[1] as u16;
+                        Ok(Command::Port(ip, port))
+                    }
+                    _ => return Err("Unknown command"),
+                }
+            }
+
+            b'U' => {
                 if command.len() <= 6 {
-                    return Err("invalid command length");
+                    return Err("Invalid command length");
                 }
-                if &command[1..4] != b"ORT" {
-                    return Err("Invalid command, maybe you meant: `PORT`?");
+                if &command[1..4] != b"SER" {
+                    return Err("Invalid command, maybe you meant: `USER`?");
                 }
-                expects_byte(
-                    command[4],
-                    b' ',
-                    "Expected space in between command and the rest.",
-                )?;
-
-                let mut ip_addr = [0u8; 4];
-                let mut port = [0u8; 2];
-                let mut byte_idx = 5;
-
-                // Parse IP + port
-                for i in 0..6 {
-                    let prev = byte_idx;
-                    while byte_idx < command.len() - 2 && command[byte_idx] != b',' {
-                        byte_idx += 1;
-                    }
-                    if i >= 4 {
-                        port[i - 4] =
-                            ascii_to_u8(&command[prev..byte_idx]).ok_or("Invalid port number")?;
-                    } else {
-                        ip_addr[i] =
-                            ascii_to_u8(&command[prev..byte_idx]).ok_or("Invalid IPv4 address")?;
-                    }
-                    byte_idx += 1;
-                }
-
-                // Check we reached the end of the command
-                if byte_idx != command.len() - 1 {
-                    return Err("Bad format of the `PORT` command");
-                }
-
-                // Try to get the IPv4
-                let ip = Ipv4Addr::from(ip_addr);
-
-                // This is the formula for getting the port number
-                let port: u16 = port[0] as u16 * 256 + port[1] as u16;
-                Ok(Command::Port(ip, port))
+                expects_byte(command[4], b' ', "Expected a space in between")?;
+                let username = std::str::from_utf8(&command[5..command.len() - 2])
+                    .map_err(|_| "Expected ASCII compliant username")?;
+                return Ok(Command::User(username));
             }
 
             _ => Err("invalid command"),
@@ -178,6 +236,19 @@ mod test {
             (
                 "RETR ./test/test/test1.txt\r\n".as_bytes(),
                 Command::Retr(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            ("USER GABI\r\n".as_bytes(), Command::User("GABI"), true),
+            (
+                "USER GABI_is_COOL\r\n".as_bytes(),
+                Command::User("GABI_is_COOL"),
+                true,
+            ),
+            ("PASV\r\n".as_bytes(), Command::Passive, true),
+            ("PASS GABI\r\n".as_bytes(), Command::Password("GABI"), true),
+            (
+                "PASS GABI_is_COOL\r\n".as_bytes(),
+                Command::Password("GABI_is_COOL"),
                 true,
             ),
             ("LIST\r\n".as_bytes(), Command::List(Path::new("./")), true),

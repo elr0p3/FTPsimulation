@@ -1,9 +1,10 @@
 use super::{command::Command, response::Response, FileTransferType};
 use super::{
-    create_response, Action, ActionList, BufferToWrite, FTPServer, HashMutex, RequestContext,
+    create_response, Action, ActionList, BufferToWrite, HashMutex, RequestContext,
     RequestContextMutex, RequestType, Token, ROOT,
 };
-use mio::{net::TcpStream, Interest, Waker};
+use crate::port::{get_ftp_port_pair, get_random_port};
+use mio::{net::TcpListener, net::TcpStream, Interest, Waker};
 use std::{
     convert::TryFrom,
     path::Path,
@@ -17,6 +18,7 @@ use std::{
     io::{Error, Write},
     net::Shutdown,
 };
+use user_manage::SystemUsers;
 
 pub struct HandlerRead {
     /// The request context token
@@ -33,6 +35,12 @@ pub struct HandlerRead {
     /// Connection mutex
     /// ** Warning Internals: This mutex should never adquired inside `handle_read`, only be used for cloning the Arc
     connection: RequestContextMutex,
+
+    users_db: Arc<Mutex<SystemUsers>>,
+
+    user_id: Option<String>,
+
+    loged: bool,
 }
 
 impl HandlerRead {
@@ -40,12 +48,18 @@ impl HandlerRead {
         connection_token: Token,
         connection_db: HashMutex<Token, RequestContextMutex>,
         connection: RequestContextMutex,
+        users_db: Arc<Mutex<SystemUsers>>,
+        user_id: Option<String>,
+        loged: bool,
     ) -> Self {
         Self {
             connection_token,
             connection_db,
             actions: Vec::new(),
             connection,
+            users_db,
+            user_id,
+            loged,
         }
     }
 
@@ -80,6 +94,7 @@ impl HandlerRead {
         match request_type {
             RequestType::CommandTransfer(stream, to_write, data_connection) => {
                 let _ = stream.flush();
+
                 // Initialize a big buffer
                 let mut buff = [0; 10024];
 
@@ -126,7 +141,48 @@ impl HandlerRead {
                 let command =
                     possible_command.expect("command parse is not an error, this is safe");
 
+                if command.is_auth_command() && (self.user_id.is_none() || !self.loged) {
+                    self.actions.push((
+                        self.connection_token,
+                        self.connection.clone(),
+                        Interest::WRITABLE,
+                    ));
+                    to_write.reset_str("531 Unauthorized.\r\n");
+                    return Ok(None);
+                }
+
                 match command {
+                    Command::Passive => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        let random_port = get_random_port();
+                        if let Some(port) = random_port {
+                            let tcp_listener =
+                                TcpListener::bind(format!("0.0.0.0:{}", port).parse().unwrap())
+                                    .expect("port to be init");
+                            let mut db = self.connection_db.lock().unwrap();
+                            let arc = Arc::new(Mutex::new(RequestContext::new(
+                                RequestType::PassiveModePort(tcp_listener, self.connection_token),
+                            )));
+                            db.insert(Token(next_id), arc.clone());
+                            self.actions.push((Token(next_id), arc, Interest::READABLE));
+                            let (first_part, second_part) = get_ftp_port_pair(port);
+                            to_write.reset_str(
+                                format!(
+                                    "227 Entering Passive Mode (0,0,0,0,{},{})",
+                                    first_part, second_part
+                                )
+                                .as_str(),
+                            );
+                            return Ok(None);
+                        }
+                        to_write.reset_str("541 All ports are taken.\r\n");
+                        return Ok(None);
+                    }
+
                     Command::Quit => {
                         self.actions.push((
                             self.connection_token,
@@ -144,8 +200,66 @@ impl HandlerRead {
                                 let _ = stream.shutdown(Shutdown::Both);
                             }
                         }));
-                        waker.wake()?;
                         return Ok(None);
+                    }
+
+                    Command::Password(pwd) => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        let mut db = self.users_db.lock().unwrap();
+                        if let Some(user_id) = &self.user_id {
+                            if !db.user_exists(&user_id) {
+                                let user = db.create_user(&user_id, pwd);
+                                if user.is_err() {
+                                    to_write.reset_str("530 Not logged in.\r\n");
+                                    return Ok(None);
+                                }
+                                to_write.reset(create_response(
+                                    Response::login_success(),
+                                    "User logged in, proceed.",
+                                ));
+                                return Ok(Some(Box::new(|ctx| {
+                                    ctx.loged = true;
+                                })));
+                            }
+                            if db.has_passwd(user_id, pwd) {
+                                to_write.reset(create_response(
+                                    Response::login_success(),
+                                    "User logged in, proceed.",
+                                ));
+                                return Ok(Some(Box::new(|ctx| {
+                                    ctx.loged = true;
+                                })));
+                            }
+                            to_write.reset_str("530 Not logged in.\r\n");
+                            return Ok(None);
+                        }
+                        to_write.reset_str("530 Not logged in.\r\n");
+                        return Ok(None);
+                    }
+
+                    Command::User(username) => {
+                        println!(
+                            "[HANDLE_READ] {} - New user {}",
+                            self.connection_token.0, username
+                        );
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        to_write.reset(create_response(
+                            Response::username_okay(),
+                            "User name okay, need password.",
+                        ));
+                        let username = username.to_string();
+                        return Ok(Some(Box::new(move |ctx| {
+                            ctx.user_id = Some(username);
+                            ctx.loged = false;
+                        })));
                     }
 
                     Command::Retr(path) => {
@@ -154,6 +268,7 @@ impl HandlerRead {
                             self.connection.clone(),
                             Interest::WRITABLE,
                         ));
+
                         if let None = data_connection {
                             to_write.reset(create_response(
                                 Response::bad_sequence_of_commands(),
@@ -169,7 +284,6 @@ impl HandlerRead {
                         let true_base = root_path.to_str().unwrap();
                         let total_path = root_path.join(path).canonicalize();
                         if let Ok(path) = total_path {
-                            // println!("{:?}", path);
                             if !path.starts_with(true_base) {
                                 to_write.reset(create_response(
                                     Response::file_unavailable(),
@@ -270,6 +384,7 @@ impl HandlerRead {
                         if let Some(connection) = connection {
                             // Clone the smart reference of this request context
                             let connection = connection.clone();
+
                             // Create a callback that captures everything it needs
                             let callback = move || {
                                 // Lock the request context
@@ -362,13 +477,14 @@ impl HandlerRead {
 
                     // Test for when the user is logging in
                     _ => {
-                        let username = "gabivlj";
-                        // todo checking
-                        let user_id = 3;
-                        return Ok(Some(Box::new(move |mut ctx| {
-                            ctx.user_id = Some(user_id);
-                            ctx.loged = false;
-                        })));
+                        unimplemented!();
+                        // let username = "gabivlj";
+                        // // todo checking
+                        // let user_id = 3;
+                        // return Ok(Some(Box::new(move |mut ctx| {
+                        //     ctx.user_id = Some(user_id);
+                        //     ctx.loged = false;
+                        // })));
                     }
                 }
 

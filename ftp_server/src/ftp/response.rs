@@ -49,6 +49,22 @@ impl Response {
         )
     }
 
+    pub fn login_success() -> Response {
+        Response::new_from_enums(
+            CodeFirst::Positive,
+            CodeSecond::AuthenticationAndAccounting,
+            0,
+        )
+    }
+
+    pub fn username_okay() -> Response {
+        Response::new_from_enums(
+            CodeFirst::PositiveIntermediate,
+            CodeSecond::AuthenticationAndAccounting,
+            1,
+        )
+    }
+
     pub fn file_unavailable() -> Response {
         Response::new_from_enums(
             CodeFirst::PermanentNegativeCompletion,
