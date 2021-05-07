@@ -24,6 +24,11 @@
     "chroot": "./home/user_01",
     "uid": 5
   },
+  "admin": {
+    "passwd": "admin",
+    "chroot": "/home/admin",
+    "uid": 0
+  },
   "anonymous": {
     "passwd": "",
     "chroot": "/home/anonymous",
@@ -34,14 +39,14 @@
     "chroot": "/home/marikong",
     "uid": 4
   },
+  "user_test_image_transfer_02": {
+    "passwd": "123456",
+    "chroot": "./home/user_test_image_transfer_02",
+    "uid": 9
+  },
   "user_test_it_works_3": {
     "passwd": "123456",
     "chroot": "./home/user_test_it_works_3",
     "uid": 6
-  },
-  "admin": {
-    "passwd": "admin",
-    "chroot": "/home/admin",
-    "uid": 0
   }
 }

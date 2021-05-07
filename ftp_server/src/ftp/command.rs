@@ -19,6 +19,9 @@ pub enum Command<'a> {
 
     Password(&'a str),
 
+    /// STOR command that passes a path where the user wants a download
+    Store(&'a Path),
+
     // PASV\r\n
     Passive,
 
@@ -59,6 +62,33 @@ fn ascii_to_u8(buff: &[u8]) -> Option<u8> {
         return None;
     }
     Some(n as u8)
+}
+
+/// Parses path out of the command
+fn parse_path<'a>(
+    // The entire command
+    command: &'a [u8],
+    // Expected command
+    expected_command: &[u8],
+    // Range of the command that should be used to compare
+    range_command: (usize, usize),
+) -> Result<&'a Path, &'static str> {
+    if command.len() <= 6 {
+        return Err("invalid command length");
+    }
+    if &command[range_command.0..range_command.1] != expected_command {
+        return Err("Invalid command");
+    }
+    expects_byte(
+        command[4],
+        b' ',
+        "Expected space in between command and the rest.",
+    )?;
+    // -2 because we wanna skip \r\n
+    let path_str =
+        std::str::from_utf8(&command[5..command.len() - 2]).map_err(|_| "expected utf8 string")?;
+    let path = Path::new(path_str);
+    Ok(path)
 }
 
 impl<'a> TryFrom<&'a [u8]> for Command<'a> {
@@ -113,24 +143,9 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
                 Ok(Command::List(path))
             }
 
-            b'R' => {
-                if command.len() <= 6 {
-                    return Err("invalid command length");
-                }
-                if &command[1..4] != b"ETR" {
-                    return Err("Invalid command, maybe you meant: `RETR`?");
-                }
-                expects_byte(
-                    command[4],
-                    b' ',
-                    "`RETR` Expected space in between command and the rest.",
-                )?;
-                // -2 because we wanna skip \r\n
-                let path_str = std::str::from_utf8(&command[5..command.len() - 2])
-                    .map_err(|_| "expected utf8 string")?;
-                let path = Path::new(path_str);
-                Ok(Command::Retr(path))
-            }
+            b'R' => Ok(Command::Retr(parse_path(&command, b"ETR", (1, 4))?)),
+
+            b'S' => Ok(Command::Store(parse_path(&command, b"TOR", (1, 4))?)),
 
             b'P' => {
                 match command[1] {
@@ -236,6 +251,11 @@ mod test {
             (
                 "RETR ./test/test/test1.txt\r\n".as_bytes(),
                 Command::Retr(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            (
+                "STOR ./test/test/test1.txt\r\n".as_bytes(),
+                Command::Store(Path::new("./test/test/test1.txt")),
                 true,
             ),
             ("USER GABI\r\n".as_bytes(), Command::User("GABI"), true),

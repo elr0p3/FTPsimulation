@@ -84,8 +84,8 @@ impl BufferToWrite {
 
 // #[derive(Debug)]
 pub enum FileTransferType {
-    /// This kind of operation is when the server is saving a file from the client
-    FileUpload(File),
+    /// This kind of operation is when the server is saving a file from the client, Response is when there is a response, if there is none when closing, it assumes an error
+    FileUpload(File, Option<Vec<u8>>),
 
     /// This kind of operation is when the server is serving a file to the client
     FileDownload(File),
@@ -506,7 +506,16 @@ impl TCPImplementation for FTPServer {
 
     /// This function should be called for almost every disconnection
     /// to do a proper cleanup everytime of every connection.
-    fn close_connection(&mut self, poll: &Poll, token: Token) -> Result<(), Error> {
+    /// If it returns an error it doesn't disconnect, useful when this is fired when read is closed but we are still reading
+    /// something from the client. e.g let's say that the user sends a file, we are reading, and the user just closes when
+    /// it just sent data, then this will be fired at the same time that the read is happening, that's why below you will
+    /// see that if there is not a response yet from handle_read it means that it didn't finish reading!
+    fn close_connection(
+        &mut self,
+        poll: &Poll,
+        token: Token,
+        waker: &Arc<Waker>,
+    ) -> Result<(), Error> {
         println!("[CLOSE_CONNECTION] - {} - Closing connection", token.0);
         let map_conn_arc = self.connections.clone();
         let map_conn = map_conn_arc.lock().unwrap();
@@ -520,41 +529,63 @@ impl TCPImplementation for FTPServer {
         };
         drop(map_conn);
         let mut conn = conn.lock().unwrap();
-        if let Some(_) = self.connections.lock().unwrap().remove(&token) {
-            println!("[CLOSE_CONNECTION] Successfully removing the connection.");
-            if let RequestType::CommandTransfer(_, _, _) = &conn.request_type {
-                self.current_connections -= 1;
-            }
-            println!(
-                "[CLOSE_CONNECTION] Current control connections - {}",
-                self.current_connections
-            );
-        }
-        println!(
-            "[CLOSE_CONNECTION] Current overall connections - {}",
-            self.connections.lock().unwrap().len()
-        );
         match &mut conn.request_type {
             RequestType::Closed(stream) => {
-                poll.registry().deregister(stream)?;
-                stream.flush();
-                stream.shutdown(Shutdown::Both)?;
+                let _ = poll.registry().deregister(stream);
+                let _ = stream.flush();
+                let _ = stream.shutdown(Shutdown::Both);
                 println!(
                     "[CLOSE_CONNECTION] - {} - Closing connection because maximum connections reached",
                     token.0
                 );
             }
 
-            RequestType::FileTransferActive(stream, _, _)
-            | RequestType::FileTransferPassive(stream, _, _) => {
+            RequestType::FileTransferActive(stream, t, conn)
+            | RequestType::FileTransferPassive(stream, t, conn) => {
+                if let FileTransferType::FileUpload(_, data_to_be_sent) = t {
+                    // As said in the function header, we shouldn't close this connection because
+                    // we wanna keep reading
+                    if data_to_be_sent.is_none() {
+                        return Err(Error::from(ErrorKind::WriteZero));
+                    }
+                    let db = self.connections.clone();
+                    let actions = self.actions.clone();
+                    let conn = *conn;
+                    let data = data_to_be_sent.clone().unwrap();
+                    // We need the waker to send actions
+                    let waker = waker.clone();
+                    // Tell the command socket to send some stuff
+                    spawn(move || {
+                        print!(
+                            "[CLOSE_CONNECTION] - {} - Closing connection File Upload - {}",
+                            token.0,
+                            std::str::from_utf8(&data).unwrap()
+                        );
+                        let db = db.lock().unwrap();
+                        let command_conn = db.get(&conn)?;
+                        let command_conn = command_conn.clone();
+                        drop(db);
+                        let mut actions = actions.lock().unwrap();
+                        let mut cmd = command_conn.lock().unwrap();
+                        if let RequestType::CommandTransfer(_, to_write, _) = &mut cmd.request_type
+                        {
+                            to_write.reset(data);
+                        }
+                        drop(cmd);
+                        actions.push((conn, command_conn, Interest::WRITABLE));
+                        let _ = waker.wake();
+                        Some(())
+                    });
+                }
                 println!(
                     "[CLOSE_CONNECTION] - {} - Closing connection FTA or FTP",
                     token.0
                 );
-                poll.registry().deregister(stream)?;
+                let _ = poll.registry().deregister(stream);
                 let _ = stream.flush();
-                stream.shutdown(Shutdown::Both)?;
+                let _ = stream.shutdown(Shutdown::Both);
             }
+
             RequestType::CommandTransfer(stream, _, conn) => {
                 println!(
                     "[CLOSE_CONNECTION] - {} - Closing connection command",
@@ -581,12 +612,31 @@ impl TCPImplementation for FTPServer {
                     }
                 }
             }
+
             RequestType::PassiveModePort(stream, _) => {
                 println!("[CLOSE_CONNECTION] - {} - Closing port", token.0);
                 // We actually just deregister when we write
                 poll.registry().deregister(stream)?;
             }
         }
+
+        // Now delete it from the database
+        if let Some(_) = self.connections.lock().unwrap().remove(&token) {
+            println!("[CLOSE_CONNECTION] Successfully removing the connection.");
+            if let RequestType::CommandTransfer(_, _, _) = &conn.request_type {
+                self.current_connections -= 1;
+            }
+            println!(
+                "[CLOSE_CONNECTION] Current control connections - {}",
+                self.current_connections
+            );
+        }
+
+        println!(
+            "[CLOSE_CONNECTION] Current overall connections - {}",
+            self.connections.lock().unwrap().len()
+        );
+        // Closing the connection, returning ok...
         Ok(())
     }
 }
@@ -833,5 +883,44 @@ mod ftp_server_testing {
         );
         join.join().unwrap();
         std::thread::sleep(Duration::from_millis(20));
+    }
+
+    #[test]
+    fn image_transfer_02() {
+        for _i in 0..100 {
+            let result = TcpStream::connect("127.0.0.1:8080");
+            if let Err(err) = result {
+                panic!("{}", err);
+            }
+            let mut stream = result.unwrap();
+            expect_response(&mut stream, "220 Service ready for new user.\r\n");
+            log_in(&mut stream, "user_test_image_transfer_02", "123456");
+            let srv = TcpListener::bind("127.0.0.1:2253").expect("to create server");
+            stream
+                .write_all(&"PORT 127,0,0,1,8,205\r\n".as_bytes())
+                .expect("writing everything");
+            let join = std::thread::spawn(move || {
+                let (mut conn, _) = srv.accept().expect("expect to receive connection");
+                for _i in 0..100 {
+                    let buff = b"Hello World!\n";
+                    conn.write_all(buff).expect("to have read");
+                }
+                let _ = conn.flush();
+            });
+            expect_response(&mut stream, "200 Command okay.\r\n");
+            stream
+                .write_all(&"STOR ./thing.txt\r\n".as_bytes())
+                .expect("writing everything");
+            expect_response(
+                &mut stream,
+                "150 File status okay; about to open data connection.\r\n",
+            );
+            expect_response(
+            &mut stream,
+            "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n",
+        );
+            join.join().unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }

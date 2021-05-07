@@ -5,6 +5,7 @@ use super::{
 };
 use crate::port::{get_ftp_port_pair, get_random_port};
 use mio::{net::TcpListener, net::TcpStream, Interest, Waker};
+use std::fs;
 use std::{
     convert::TryFrom,
     path::Path,
@@ -81,6 +82,24 @@ impl HandlerRead {
         }
     }
 
+    fn handle_file_transfer_upload(
+        &mut self,
+        ctx: &mut RequestContext,
+        file: File,
+    ) -> Result<(), Error> {
+        match &mut ctx.request_type {
+            RequestType::CommandTransfer(_, _, _) | RequestType::Closed(_) => {
+                Err(Error::from(ErrorKind::NotFound))
+            }
+            RequestType::FileTransferPassive(_stream, ftt, _)
+            | RequestType::FileTransferActive(_stream, ftt, _) => {
+                *ftt = FileTransferType::FileUpload(file, None);
+                Ok(())
+            }
+            RequestType::PassiveModePort(_, _) => Err(Error::from(ErrorKind::NotFound)),
+        }
+    }
+
     /// This function handles the read of the `request_type`,
     /// Will use `actions` for cloning its `Arc`, not for adquiring it
     /// `next_id` is assumed to be used, so the caller should provide always the next id
@@ -100,6 +119,16 @@ impl HandlerRead {
 
                 // Read thing into the buffer TODO Handle block in multithread
                 let read = stream.read(&mut buff)?;
+
+                if read == 0 {
+                    self.actions.push((
+                        self.connection_token,
+                        self.connection.clone(),
+                        Interest::READABLE,
+                    ));
+                    stream.shutdown(Shutdown::Both)?;
+                    return Ok(None);
+                }
 
                 println!(
                     "[HANDLE_READ] {} - {} bytes read",
@@ -345,6 +374,85 @@ impl HandlerRead {
                         }
                     }
 
+                    Command::Store(path) => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        let mut callback_error = || {
+                            to_write.reset(create_response(
+                                Response::file_unavailable(),
+                                "Requested action not taken. File unavailable, no access.",
+                            ));
+                        };
+                        if let None = data_connection {
+                            callback_error();
+                            return Ok(None);
+                        }
+                        // TODO Handle this
+                        let base = format!("{}/{}", ROOT, "username");
+                        let root_path = Path::new(base.as_str()).canonicalize().unwrap();
+                        let true_base = root_path.to_str().unwrap();
+                        let parent = path.parent();
+                        let child = path.file_name();
+                        if parent.is_none() || child.is_none() {
+                            callback_error();
+                            return Ok(None);
+                        }
+                        let child = child.unwrap();
+                        let total_path = root_path.join(parent.unwrap()).canonicalize();
+                        if let Ok(path) = total_path {
+                            if !path.starts_with(true_base) {
+                                callback_error();
+                                return Ok(None);
+                            }
+                            let end_path = path.join(child);
+                            let file_options = fs::OpenOptions::new()
+                                .append(false)
+                                .create(true)
+                                .write(true)
+                                .open(end_path.clone());
+                            if let Ok(file) = file_options {
+                                // Check that the file is really on a good position to exist
+                                if end_path.canonicalize().is_err() {
+                                    callback_error();
+                                    return Ok(None);
+                                }
+                                let db = self.connection_db.lock().unwrap();
+                                let token_data = data_connection.take().unwrap();
+                                let conn = db.get(&token_data);
+                                if let Some(conn) = conn {
+                                    // Clone Arc because we must drop DB lock
+                                    let conn = conn.clone();
+                                    drop(db);
+                                    let mut conn_lock = conn.lock().unwrap();
+                                    if let Err(_) =
+                                        self.handle_file_transfer_upload(&mut conn_lock, file)
+                                    {
+                                        callback_error();
+                                        return Ok(None);
+                                    } else {
+                                        // HEH... I don't know but Rust doesn't get that this really needs to die here!
+                                        drop(conn_lock);
+                                        to_write.reset(create_response(
+                                            Response::file_status_okay(),
+                                            "File status okay; about to open data connection.",
+                                        ));
+                                        to_write.callback_after_sending =
+                                            Some(Box::new(move || {                                         
+                                                let mut actions = actions.lock().unwrap();
+                                                actions.push((token_data, conn, Interest::READABLE));
+                                            }));
+                                    }
+                                    return Ok(None);
+                                }
+                            }
+                            callback_error();
+                            return Ok(None);
+                        }
+                    }
+
                     Command::List(_path) => {
                         // Inform that we are interested in writing a command again
                         self.actions.push((
@@ -532,7 +640,88 @@ impl HandlerRead {
                 Ok(None)
             }
 
+            RequestType::FileTransferActive(stream, type_connection, _data_conn_token)
+            | RequestType::FileTransferPassive(stream, type_connection, _data_conn_token) => {
+                println!("[HANDLE_READ] Yeah let's go");
+                if let Ok(should_close) = self.handle_file_type(stream, type_connection) {
+                    if should_close {
+                        let _ = stream.shutdown(Shutdown::Both);
+                    }
+                } else {
+                    let _ = stream.shutdown(Shutdown::Both);
+                }
+                return Ok(None);
+            }
+
             _ => unimplemented!("Unimplemented Request type"),
+        }
+    }
+
+    /// Returns true and Ok if it finished transfering, returns false and Ok if it needs more reads, returns Error if there is an error and needs shutdown
+    fn handle_file_type(
+        &mut self,
+        stream: &mut TcpStream,
+        transfer_type: &mut FileTransferType,
+    ) -> Result<bool, ()> {
+        match transfer_type {
+            FileTransferType::FileUpload(file, possible_response) => {
+                println!(
+                    "[HANDLE_FILE_TYPE] {} - Reading from file transfer...",
+                    self.connection_token.0
+                );
+                let mut buff = [0; 10024];
+                let read_result = stream.read(&mut buff);
+                self.actions.push((
+                    self.connection_token,
+                    self.connection.clone(),
+                    Interest::READABLE,
+                ));
+                if let Ok(read_bytes) = read_result {                   
+                    if read_bytes == 0 {
+                        *possible_response = 
+                        Some(create_response(
+                            Response::success_uploading_file(), 
+                            "Closing data connection. Requested file action successful (for example, file transfer or file abort)."
+                        ));             
+                        return Ok(true);
+                    }
+                    let err = file.write(&buff[..read_bytes]);
+                    if err.is_err() {
+                        println!(
+                            "[HANDLE_FILE_TYPE] {} - Error writing to file {}...",
+                            self.connection_token.0,
+                            err.unwrap_err()
+                        );
+                        return Err(());
+                    }                                      
+                    println!(
+                        "[HANDLE_FILE_TYPE] {} - Successfully read...",
+                        self.connection_token.0
+                    );
+                } else if let Err(err) = read_result {
+                    if err.kind() == ErrorKind::WouldBlock {
+                        println!(
+                            "[HANDLE_FILE_TYPE] {} - Would block...",
+                            self.connection_token.0
+                        );                        
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::READABLE,
+                        ));
+                        return Ok(false);
+                    }                    
+                    *possible_response = Some(b"451 Requested action aborted: local error in processing.\r\n".to_vec());
+                    println!(
+                        "[HANDLE_FILE_TYPE] {} - Error Reading File: {}...",
+                        self.connection_token.0, err
+                    );
+                    // NOTE Thinking about doing file cleanup?
+                    return Err(());
+                }
+                Ok(false)
+            }
+            _ => Err(()),
         }
     }
 }

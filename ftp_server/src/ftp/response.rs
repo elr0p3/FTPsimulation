@@ -33,6 +33,10 @@ impl Response {
         Response::new_from_enums(CodeFirst::Positive, CodeSecond::Syntax, 1)
     }
 
+    pub fn success_uploading_file() -> Response {
+        Response::new_from_enums(CodeFirst::Positive, CodeSecond::Connections, 6)
+    }
+
     pub fn closing_data_connection() -> Response {
         Response::new_from_enums(CodeFirst::Positive, CodeSecond::Connections, 6)
     }

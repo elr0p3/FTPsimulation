@@ -65,7 +65,12 @@ pub trait TCPImplementation {
     ) -> Result<(), std::io::Error>;
 
     /// Close connection handler
-    fn close_connection(&mut self, poll: &Poll, id: Token) -> Result<(), std::io::Error>;
+    fn close_connection(
+        &mut self,
+        poll: &Poll,
+        id: Token,
+        waker: &Arc<Waker>,
+    ) -> Result<(), std::io::Error>;
 
     /// Function that will be called when the server needs a new id for the next connection
     fn next_id(&mut self) -> usize;
@@ -136,8 +141,11 @@ pub fn create_server<T: AsRef<str>>(
         // Process each event.
         for event in events.iter() {
             if event.is_error() || event.is_read_closed() || event.is_write_closed() {
-                let _ = tcp_implementation.close_connection(&poll, event.token());
-                continue;
+                let res = tcp_implementation.close_connection(&poll, event.token(), &waker);
+                // If there was an error closing it means that the user doesn't want to close this connection yet
+                if !res.is_err() {
+                    continue;
+                }
             }
             // We can use the token we previously provided to `register` to
             // determine for which socket the event is.
@@ -154,7 +162,11 @@ pub fn create_server<T: AsRef<str>>(
                                     &poll,
                                     stream,
                                 ) {
-                                    tcp_implementation.close_connection(&poll, Token(id))?;
+                                    tcp_implementation.close_connection(
+                                        &poll,
+                                        Token(id),
+                                        &waker,
+                                    )?;
                                 }
                                 id = tcp_implementation.next_id();
                             }
@@ -175,7 +187,11 @@ pub fn create_server<T: AsRef<str>>(
                                     continue;
                                 }
                                 _ => {
-                                    tcp_implementation.close_connection(&poll, event.token())?;
+                                    tcp_implementation.close_connection(
+                                        &poll,
+                                        event.token(),
+                                        &waker,
+                                    )?;
                                 }
                             }
                         }
@@ -188,9 +204,11 @@ pub fn create_server<T: AsRef<str>>(
                                     continue;
                                 }
                                 _ => {
-                                    if let Err(err) =
-                                        tcp_implementation.close_connection(&poll, event.token())
-                                    {
+                                    if let Err(err) = tcp_implementation.close_connection(
+                                        &poll,
+                                        event.token(),
+                                        &waker,
+                                    ) {
                                         println!(
                                             "something happened when closing a socket: {}",
                                             err
@@ -200,6 +218,11 @@ pub fn create_server<T: AsRef<str>>(
                             }
                         }
                     }
+                    // if event.is_error() || (event.is_read_closed()) || (event.is_write_closed()) {
+                    //     println!("{:?}", event);
+                    //     let _ = tcp_implementation.close_connection(&poll, event.token(), &waker);
+                    //     continue;
+                    // }
                 }
             }
         }
