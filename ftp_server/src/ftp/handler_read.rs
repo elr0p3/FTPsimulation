@@ -103,6 +103,7 @@ impl HandlerRead {
     /// This function handles the read of the `request_type`,
     /// Will use `actions` for cloning its `Arc`, not for adquiring it
     /// `next_id` is assumed to be used, so the caller should provide always the next id
+    /// Will return a possible callback that should be called when dropping the mutex_lock of the passed `request_type`
     pub fn handle_read(
         &mut self,
         request_type: &mut RequestType,
@@ -201,7 +202,7 @@ impl HandlerRead {
                             let (first_part, second_part) = get_ftp_port_pair(port);
                             to_write.reset_str(
                                 format!(
-                                    "227 Entering Passive Mode (0,0,0,0,{},{})",
+                                    "227 Entering Passive Mode (0,0,0,0,{},{})\r\n",
                                     first_part, second_part
                                 )
                                 .as_str(),
@@ -616,17 +617,24 @@ impl HandlerRead {
                     ),
                 )));
 
+                // Insert connection to the db
                 connection_db.insert(token_for_connection, shared_request_ctx.clone());
 
+                // Remove the port from the database
                 connection_db.remove(&self.connection_token);
+                
+                // Get the comomand connection
                 let cmd_connection = connection_db.get_mut(command_conn_ref);
-
+                
+                // Handle some
                 if let Some(cmd_connection) = cmd_connection {
+                    // Clone arc so we can push interest 
                     let command_conn_arc = cmd_connection.clone();
                     if let RequestType::CommandTransfer(_stream, buff, f) =
                         &mut cmd_connection.lock().unwrap().request_type
                     {
                         *f = Some(Token(next_id));
+                        // *TODO Needs better response 
                         buff.reset(create_response(Response::command_okay(), "Command okay."));
                         self.actions
                             .push((*command_conn_ref, command_conn_arc, Interest::WRITABLE))

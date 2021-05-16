@@ -472,9 +472,6 @@ impl TCPImplementation for FTPServer {
                 drop(connection_mutex);
                 println!("[READ_CONNECTION] - {} - Would block", token.0);
                 let mut actions = actions.lock().unwrap();
-                // The reason we are doing readable + writable is
-                // that we don't know in a certain way the state of this socket!
-                // Probably this event has been called just after deregistering
                 actions.push((
                     handler_read.connection_token,
                     connection_arc.clone(),
@@ -647,6 +644,7 @@ mod ftp_server_testing {
     use std::net::TcpListener;
     use std::net::TcpStream;
     use std::{io::Read, time::Duration};
+
     // use mio::net::{SocketAddr, TcpListener};
 
     fn expect_response(stream: &mut TcpStream, response_expects: &str) {
@@ -916,11 +914,66 @@ mod ftp_server_testing {
                 "150 File status okay; about to open data connection.\r\n",
             );
             expect_response(
-            &mut stream,
-            "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n",
-        );
+                &mut stream,
+                "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n",
+            );
             join.join().unwrap();
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn passive_connection() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_test_image_transfer_02", "123456");
+        stream.write_all(&"PASV\r\n".as_bytes()).unwrap();
+        let mut b = BufReader::new(&mut stream);
+        let mut str = String::new();
+        b.read_line(&mut str).expect("to work");
+        let end_no_jl = str.len() - 2;
+        let s = &mut str[..end_no_jl - 1];
+        let split = s.split('(').collect::<Vec<&str>>();
+        let bytes: Vec<u8> = split
+            .last()
+            .unwrap()
+            .split(',')
+            .map(|el| el.parse().unwrap())
+            .collect();
+        let port: u16 = bytes[bytes.len() - 2] as u16 * 256 + bytes[bytes.len() - 1] as u16;
+        let ip = format!(
+            "{}.{}.{}.{}:{}",
+            bytes[0], bytes[1], bytes[2], bytes[3], port
+        );
+        let mut connection =
+            TcpStream::connect_timeout(ip.parse().as_ref().unwrap(), Duration::from_micros(1000))
+                .unwrap();
+        expect_response(&mut stream, "200 Command okay.\r\n");
+        let join = std::thread::spawn(move || {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open("./2.jpg")
+                .unwrap();
+            let mut buff = [0; 1024];
+            loop {
+                let read = connection.read(&mut buff).expect("to have read");
+                if read == 0 {
+                    break;
+                }
+                f.write(&buff[0..read]).expect("to work");
+            }
+        });
+        stream
+            .write_all(&"RETR ./1.jpeg\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(&mut stream, "150 File download starts!\r\n");
+        expect_response(
+            &mut stream,
+            "226 Closing data connection. Requested file action successful. (file transfer)\r\n",
+        );
+        join.join().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
