@@ -25,8 +25,8 @@ pub struct User {
 
 impl User {
     pub fn new(username: &str, passwd: &str, uid: u16) -> Self {
-        let _ = fs::create_dir(format!("./home/{}", username));
-        let chroot = "./home/".to_string() + username;
+        let _ = fs::create_dir(format!("./root/{}", username));
+        let chroot = "./root/".to_string() + username;
         Self {
             passwd: passwd.to_string(),
             chroot: chroot.clone(),
@@ -106,7 +106,7 @@ impl SystemUsers {
         let mut users_data: HashMap<String, User> = serde_json::from_str(&content)?;
 
         users_data.iter_mut().for_each(|(_, user)| {
-            user.actual_dir = user.chroot.clone();
+            user.actual_dir = "./".to_string();
         });
 
         let log_file = OpenOptions::new().write(true).append(true).open(LOG_PATH)?;
@@ -195,8 +195,8 @@ impl SystemUsers {
         }
 
         let user = User::new(user_name, passwd, uid);
+        let _ = fs::create_dir(&user.chroot);
         self.users_data.insert(user_name.to_string(), user);
-
         self.serialize_users().unwrap();
 
         writeln!(

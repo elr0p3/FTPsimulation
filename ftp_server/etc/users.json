@@ -1,52 +1,32 @@
 {
-  "user_test_it_works_2": {
+  "user_012": {
     "passwd": "123456",
-    "chroot": "./home/user_test_it_works_2",
-    "uid": 7
-  },
-  "user_test_image_transfer": {
-    "passwd": "123456",
-    "chroot": "./home/user_test_image_transfer",
-    "uid": 8
-  },
-  "root": {
-    "passwd": "toor",
-    "chroot": "/root",
-    "uid": 1
-  },
-  "user": {
-    "passwd": "user",
-    "chroot": "/home/user",
-    "uid": 3
-  },
-  "user_01": {
-    "passwd": "123456",
-    "chroot": "./home/user_01",
+    "chroot": "./root/user_012",
     "uid": 5
-  },
-  "admin": {
-    "passwd": "admin",
-    "chroot": "/home/admin",
-    "uid": 0
-  },
-  "anonymous": {
-    "passwd": "",
-    "chroot": "/home/anonymous",
-    "uid": 2
-  },
-  "marikong": {
-    "passwd": "marikong",
-    "chroot": "/home/marikong",
-    "uid": 4
   },
   "user_test_image_transfer_02": {
     "passwd": "123456",
-    "chroot": "./home/user_test_image_transfer_02",
-    "uid": 9
+    "chroot": "./root/user_test_image_transfer_02",
+    "uid": 4
+  },
+  "user_01": {
+    "passwd": "123456",
+    "chroot": "./root/user_01",
+    "uid": 0
+  },
+  "user_test_image_transfer": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_image_transfer",
+    "uid": 2
   },
   "user_test_it_works_3": {
     "passwd": "123456",
-    "chroot": "./home/user_test_it_works_3",
-    "uid": 6
+    "chroot": "./root/user_test_it_works_3",
+    "uid": 3
+  },
+  "user_test_it_works_2": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_it_works_2",
+    "uid": 1
   }
 }

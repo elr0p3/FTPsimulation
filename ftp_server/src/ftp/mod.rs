@@ -668,6 +668,8 @@ mod ftp_server_testing {
         expect_response(stream, "230 User logged in, proceed.\r\n");
     }
 
+    use crate::system;
+
     #[test]
     fn it_works() {
         for _ in 0..100 {
@@ -677,7 +679,7 @@ mod ftp_server_testing {
             }
             let mut stream = result.unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
-            log_in(&mut stream, "user_01", "123456");
+            log_in(&mut stream, "user_012", "123456");
             let srv = TcpListener::bind("127.0.0.1:2234").expect("to create server");
             // println!("expect writing everything");
             stream
@@ -689,8 +691,8 @@ mod ftp_server_testing {
                 let mut buff = [0; 1024];
                 // println!("read 1st");
                 let read = conn.read(&mut buff).expect("to have read");
-                assert_eq!(read, 1000);
-                assert_eq!(buff[0], 1);
+                let v = system::ls("./root/user_012").unwrap();
+                assert_eq!(v, &buff[..read]);
                 // println!("read 2nd");
                 let possible_err = conn.read(&mut buff);
                 assert!(possible_err.unwrap() == 0);
@@ -750,11 +752,11 @@ mod ftp_server_testing {
             let join = std::thread::spawn(move || {
                 let (mut conn, _) = srv.accept().expect("expect to receive connection");
                 let mut buff = [0; 1024];
-
+                // println!("read 1st");
                 let read = conn.read(&mut buff).expect("to have read");
-                assert_eq!(read, 1000);
-                assert_eq!(buff[0], 1);
-
+                let v = system::ls("./root/user_test_it_works_2").unwrap();
+                assert_eq!(v, &buff[..read]);
+                // println!("read 2nd");
                 let possible_err = conn.read(&mut buff);
                 assert!(possible_err.unwrap() == 0);
             });
@@ -813,11 +815,9 @@ mod ftp_server_testing {
             let join = std::thread::spawn(move || {
                 let (mut conn, _) = srv.accept().expect("expect to receive connection");
                 let mut buff = [0; 1024];
-
                 let read = conn.read(&mut buff).expect("to have read");
-                assert_eq!(read, 1000);
-                assert_eq!(buff[0], 1);
-
+                let v = system::ls("./root/user_test_it_works_3").unwrap();
+                assert_eq!(v, &buff[..read]);
                 let possible_err = conn.read(&mut buff);
                 assert!(possible_err.unwrap() == 0);
             });
@@ -924,6 +924,8 @@ mod ftp_server_testing {
 
     #[test]
     fn passive_connection() {
+        // We could reduce these steps to functions and reuse them but its ok
+        // at the moment
         let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");

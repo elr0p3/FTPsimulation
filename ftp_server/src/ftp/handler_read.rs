@@ -3,6 +3,7 @@ use super::{
     create_response, Action, ActionList, BufferToWrite, HashMutex, RequestContext,
     RequestContextMutex, RequestType, Token, ROOT,
 };
+use crate::system;
 use crate::port::{get_ftp_port_pair, get_random_port};
 use mio::{net::TcpListener, net::TcpStream, Interest, Waker};
 use std::fs;
@@ -42,6 +43,11 @@ pub struct HandlerRead {
     user_id: Option<String>,
 
     loged: bool,
+}
+
+pub enum ErrorTypeUser {
+    PathNotFound,
+    UserNotFound
 }
 
 impl HandlerRead {
@@ -97,6 +103,40 @@ impl HandlerRead {
                 Ok(())
             }
             RequestType::PassiveModePort(_, _) => Err(Error::from(ErrorKind::NotFound)),
+        }
+    }
+
+    pub fn get_user_path(&self) -> Option<String> {
+        let user_id = self.user_id.as_ref().unwrap();
+        let db = self.users_db.lock().unwrap();
+        let user = db.get_user(user_id)?;        
+        Some(user.get_chroot().clone())
+    } 
+
+    pub fn handle_user_path(&self, path: &Path) -> Result<String, ErrorTypeUser> {
+        let user_id = self.user_id.as_ref().unwrap();
+        let db = self.users_db.lock().unwrap();
+        let user = db.get_user(user_id);
+        if let None = user {
+            return Err(ErrorTypeUser::UserNotFound);
+        }
+        let user = user.unwrap();
+        let p = user.total_path();
+        let p = p.to_str().unwrap();
+
+        let base = format!("{}", p);
+        drop(db);
+        let root_path = Path::new(base.as_str()).canonicalize().unwrap();
+        let true_base = root_path.to_str().unwrap();
+        let total_path = root_path.join(path).canonicalize();
+        if let Ok(path) = total_path {
+            if !path.starts_with(true_base) {
+                Err(ErrorTypeUser::PathNotFound)
+            } else {
+                Ok(path.to_str().unwrap().to_string())
+            }
+        } else {
+            Err(ErrorTypeUser::PathNotFound)
         }
     }
 
@@ -239,7 +279,7 @@ impl HandlerRead {
                             self.connection.clone(),
                             Interest::WRITABLE,
                         ));
-                        let mut db = self.users_db.lock().unwrap();
+                        let mut db = self.users_db.lock().unwrap();                        
                         if let Some(user_id) = &self.user_id {
                             if !db.user_exists(&user_id) {
                                 let user = db.create_user(&user_id, pwd);
@@ -260,7 +300,7 @@ impl HandlerRead {
                                     Response::login_success(),
                                     "User logged in, proceed.",
                                 ));
-                                return Ok(Some(Box::new(|ctx| {
+                                return Ok(Some(Box::new(move |ctx| {                                
                                     ctx.loged = true;
                                 })));
                             }
@@ -305,22 +345,8 @@ impl HandlerRead {
                                 "Bad sequence of commands.",
                             ));
                             return Ok(None);
-                        }
-
-                        // Example of parsing the path, later on we will need to build
-                        // from here
-                        let base = format!("{}/{}", ROOT, "username");
-                        let root_path = Path::new(base.as_str()).canonicalize().unwrap();
-                        let true_base = root_path.to_str().unwrap();
-                        let total_path = root_path.join(path).canonicalize();
-                        if let Ok(path) = total_path {
-                            if !path.starts_with(true_base) {
-                                to_write.reset(create_response(
-                                    Response::file_unavailable(),
-                                    "Requested action not taken. File unavailable, no access.",
-                                ));
-                                return Ok(None);
-                            }
+                        }                    
+                        if let Ok(path) = self.handle_user_path(path) {                        
                             let file = File::open(path);
                             if let Err(_) = file {
                                 to_write.reset(create_response(
@@ -391,8 +417,12 @@ impl HandlerRead {
                             callback_error();
                             return Ok(None);
                         }
-                        // TODO Handle this
-                        let base = format!("{}/{}", ROOT, "username");
+                        let path_user = self.get_user_path();
+                        if let None = path_user {
+                            callback_error();
+                            return Ok(None);
+                        }
+                        let base = path_user.unwrap();
                         let root_path = Path::new(base.as_str()).canonicalize().unwrap();
                         let true_base = root_path.to_str().unwrap();
                         let parent = path.parent();
@@ -454,7 +484,7 @@ impl HandlerRead {
                         }
                     }
 
-                    Command::List(_path) => {
+                    Command::List(path) => {
                         // Inform that we are interested in writing a command again
                         self.actions.push((
                             self.connection_token,
@@ -493,38 +523,47 @@ impl HandlerRead {
                         if let Some(connection) = connection {
                             // Clone the smart reference of this request context
                             let connection = connection.clone();
+                            let res = self.handle_user_path(path);
+                            if let Ok(path) = res {
 
-                            // Create a callback that captures everything it needs
-                            let callback = move || {
-                                // Lock the request context
-                                let mut connection_m = connection.lock().unwrap();
+                                let list = system::ls(path.as_str()).unwrap();
+                                // Create a callback that captures everything it needs
+                                let callback = move || {
+                                    // Lock the request context
+                                    let mut connection_m = connection.lock().unwrap();
 
-                                // Remember that this is the data connection,
-                                // fill the data to write
-                                match &mut connection_m.request_type {
-                                    RequestType::FileTransferPassive(_, ftt, _)
-                                    | RequestType::FileTransferActive(_, ftt, _) => {
-                                        *ftt = FileTransferType::Buffer(BufferToWrite::new(
-                                            vec![1].repeat(1000),
-                                        ));
+                                    // Remember that this is the data connection,
+                                    // fill the data to write
+                                    match &mut connection_m.request_type {
+                                        RequestType::FileTransferPassive(_, ftt, _)
+                                        | RequestType::FileTransferActive(_, ftt, _) => {
+                                            *ftt = FileTransferType::Buffer(BufferToWrite::new(
+                                                list
+                                            ));
+                                        }
+                                        _ => unimplemented!(),
                                     }
-                                    _ => unimplemented!(),
-                                }
 
-                                // Now that we are free of the connection mutex, it's safe
-                                // to add to the actions array
-                                actions.lock().unwrap().push((
-                                    data_connection,
-                                    connection.clone(),
-                                    Interest::WRITABLE,
+                                    // Now that we are free of the connection mutex, it's safe
+                                    // to add to the actions array
+                                    actions.lock().unwrap().push((
+                                        data_connection,
+                                        connection.clone(),
+                                        Interest::WRITABLE,
+                                    ));
+
+                                    // wake the Poll
+                                    let _ = waker.wake();
+                                };
+
+                                // Set the callback
+                                to_write.callback_after_sending = Some(Box::new(callback));
+                            } else {
+                                to_write.reset(create_response(
+                                    Response::file_unavailable(),
+                                    "Requested action not taken. File unavailable, no access.",
                                 ));
-
-                                // wake the Poll
-                                let _ = waker.wake();
-                            };
-
-                            // Set the callback
-                            to_write.callback_after_sending = Some(Box::new(callback));
+                            }
                         } else {
                             // Inform the user that we couldn't find the data connection
                             to_write.reset(create_response(

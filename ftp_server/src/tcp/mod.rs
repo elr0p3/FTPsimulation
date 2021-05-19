@@ -91,14 +91,15 @@ fn handle_request_type(
             if interest == Interest::AIO {
                 println!("deregister");
             } else {
-                poll.registry().reregister(stream, token, interest)?;
+                let _ = poll.registry().deregister(stream);
+                poll.registry().register(stream, token, interest)?;
             }
         }
         RequestType::PassiveModePort(stream, _) => {
             if interest == Interest::AIO {
                 // poll.registry().deregister(stream)?;
             } else {
-                poll.registry().reregister(stream, token, interest)?;
+                poll.registry().register(stream, token, interest)?;
             }
         }
     }
@@ -162,11 +163,11 @@ pub fn create_server<T: AsRef<str>>(
                                     &poll,
                                     stream,
                                 ) {
-                                    tcp_implementation.close_connection(
+                                    let _ = tcp_implementation.close_connection(
                                         &poll,
                                         Token(id),
                                         &waker,
-                                    )?;
+                                    );
                                 }
                                 id = tcp_implementation.next_id();
                             }
@@ -187,11 +188,11 @@ pub fn create_server<T: AsRef<str>>(
                                     continue;
                                 }
                                 _ => {
-                                    tcp_implementation.close_connection(
+                                    let _ = tcp_implementation.close_connection(
                                         &poll,
                                         event.token(),
                                         &waker,
-                                    )?;
+                                    );
                                 }
                             }
                         }
