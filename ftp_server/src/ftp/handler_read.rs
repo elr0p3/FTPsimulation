@@ -332,6 +332,7 @@ impl HandlerRead {
                         })));
                     }
 
+
                     Command::Retr(path) => {
                         self.actions.push((
                             self.connection_token,
@@ -401,6 +402,57 @@ impl HandlerRead {
                         }
                     }
 
+                    Command::Mkdir(path) => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE
+                        ));
+                        let mut callback_error = || {
+                            to_write.reset(create_response(
+                                Response::file_unavailable(),
+                                "Requested action not taken. File unavailable, no access.",
+                            ));
+                        };
+                        let path_user = self.get_user_path();
+                        if let None = path_user {
+                            callback_error();
+                            return Ok(None);
+                        }
+                        let base = path_user.unwrap();
+                        let root_path = Path::new(base.as_str()).canonicalize().unwrap();
+                        let true_base = root_path.to_str().unwrap();
+                        let parent = path.parent();
+                        let child = path.file_name();
+                        if child.is_none() {
+                            callback_error();
+                            return Ok(None);
+                        }
+                        let child = child.unwrap().to_str().unwrap();
+                        let parent = parent.map(|el| if el == Path::new("/") { Path::new("./") } else { el }).unwrap_or(Path::new("./"));
+                        let total_path = root_path.join(parent).canonicalize();
+                        if let Ok(path) = total_path {
+                            if !path.starts_with(true_base) {
+                                callback_error();
+                                return Ok(None);
+                            }
+                            let end_path = path.join(child);
+                            let result = std::fs::create_dir(end_path);
+                            if result.is_err() {
+                                callback_error();
+                                return Ok(None);
+                            }
+                            let resp = format!("'{}' directory created.", child);
+                            to_write.reset(create_response(
+                                Response::directory_action_okay(),
+                                resp.as_str(),
+                            ));
+                        } else {
+                            callback_error();
+                        }
+                        return Ok(None);
+                    }
+
                     Command::Store(path) => {
                         self.actions.push((
                             self.connection_token,
@@ -427,12 +479,12 @@ impl HandlerRead {
                         let true_base = root_path.to_str().unwrap();
                         let parent = path.parent();
                         let child = path.file_name();
-                        if parent.is_none() || child.is_none() {
+                        if child.is_none() {
                             callback_error();
                             return Ok(None);
                         }
                         let child = child.unwrap();
-                        let total_path = root_path.join(parent.unwrap()).canonicalize();
+                        let total_path = root_path.join(parent.unwrap_or(Path::new("./"))).canonicalize();
                         if let Ok(path) = total_path {
                             if !path.starts_with(true_base) {
                                 callback_error();

@@ -24,6 +24,10 @@ pub struct User {
 }
 
 impl User {
+    pub fn create_dir(&self) {
+        let _ = fs::create_dir(&self.chroot);
+    }
+
     pub fn new(username: &str, passwd: &str, uid: u16) -> Self {
         let _ = fs::create_dir(format!("./root/{}", username));
         let chroot = "./root/".to_string() + username;
@@ -107,6 +111,8 @@ impl SystemUsers {
 
         users_data.iter_mut().for_each(|(_, user)| {
             user.actual_dir = "./".to_string();
+
+            user.create_dir();
         });
 
         let log_file = OpenOptions::new().write(true).append(true).open(LOG_PATH)?;
@@ -195,7 +201,7 @@ impl SystemUsers {
         }
 
         let user = User::new(user_name, passwd, uid);
-        let _ = fs::create_dir(&user.chroot);
+        let _ = fs::create_dir(&user.get_actual_dir());
         self.users_data.insert(user_name.to_string(), user);
         self.serialize_users().unwrap();
 

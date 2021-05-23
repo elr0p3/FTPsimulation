@@ -802,9 +802,6 @@ mod ftp_server_testing {
     fn it_works3() {
         for _ in 0..100 {
             let result = TcpStream::connect("127.0.0.1:8080");
-            if let Err(err) = result {
-                panic!("{}", err);
-            }
             let mut stream = result.unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
             log_in(&mut stream, "user_test_it_works_3", "123456");
@@ -920,6 +917,20 @@ mod ftp_server_testing {
             join.join().unwrap();
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn mkdir() {
+        // We could reduce these steps to functions and reuse them but its ok
+        // at the moment
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_test_mkdir_01", "123456");
+        stream
+            .write_all(&"MKD /test\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(&mut stream, "257 'test' directory created.\r\n");
     }
 
     #[test]

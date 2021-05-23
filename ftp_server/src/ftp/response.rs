@@ -89,6 +89,14 @@ impl Response {
         Response::new_from_enums(CodeFirst::PositivePreliminary, CodeSecond::FileSystem, 0)
     }
 
+    pub fn file_action_okay() -> Response {
+        Response::new_from_enums(CodeFirst::Positive, CodeSecond::FileSystem, 0)
+    }
+
+    pub fn directory_action_okay() -> Response {
+        Response::new_from_enums(CodeFirst::Positive, CodeSecond::FileSystem, 7)
+    }
+
     pub fn cant_open_data_connection() -> Response {
         Response::new_from_enums(
             CodeFirst::TransientNegativeCompletion,

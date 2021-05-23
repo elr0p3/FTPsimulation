@@ -25,6 +25,9 @@ pub enum Command<'a> {
     // PASV\r\n
     Passive,
 
+    /// Creates dir on the specified path
+    Mkdir(&'a Path),
+
     /// Quit the connection
     Quit,
 }
@@ -33,7 +36,11 @@ impl<'a> Command<'a> {
     /// Returns if this command needs authentication in the FTP protocol
     pub fn is_auth_command(&self) -> bool {
         match self {
-            Command::Port(_, _) | Command::List(_) | Command::Retr(_) => true,
+            Command::Port(_, _)
+            | Command::List(_)
+            | Command::Retr(_)
+            | &Command::Mkdir(_)
+            | &Command::Store(_) => true,
             _ => false,
         }
     }
@@ -80,13 +87,13 @@ fn parse_path<'a>(
         return Err("Invalid command");
     }
     expects_byte(
-        command[4],
+        command[range_command.1],
         b' ',
         "Expected space in between command and the rest.",
     )?;
     // -2 because we wanna skip \r\n
-    let path_str =
-        std::str::from_utf8(&command[5..command.len() - 2]).map_err(|_| "expected utf8 string")?;
+    let path_str = std::str::from_utf8(&command[range_command.1 + 1..command.len() - 2])
+        .map_err(|_| "expected utf8 string")?;
     let path = Path::new(path_str);
     Ok(path)
 }
@@ -113,6 +120,8 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
         // This is also done in compilers with switch statements, where they create
         // a trie of switches where they check if the word is a keyword.
         match command[0] {
+            b'M' => Ok(Command::Mkdir(parse_path(&command, b"KD", (1, 3))?)),
+
             b'Q' => {
                 if command.len() <= 4 || &command[1..4] != b"UIT" {
                     return Err("Invalid command, did you mean `QUIT`?");
@@ -256,6 +265,11 @@ mod test {
             (
                 "STOR ./test/test/test1.txt\r\n".as_bytes(),
                 Command::Store(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            (
+                "MKD ./test/test/test1.txt\r\n".as_bytes(),
+                Command::Mkdir(Path::new("./test/test/test1.txt")),
                 true,
             ),
             ("USER GABI\r\n".as_bytes(), Command::User("GABI"), true),
