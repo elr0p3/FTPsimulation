@@ -894,27 +894,7 @@ mod ftp_server_testing {
             stream
                 .write_all(&"PORT 127,0,0,1,8,205\r\n".as_bytes())
                 .expect("writing everything");
-            let join = std::thread::spawn(move || {
-                let (mut conn, _) = srv.accept().expect("expect to receive connection");
-                for _i in 0..100 {
-                    let buff = b"Hello World!\n";
-                    conn.write_all(buff).expect("to have read");
-                }
-                let _ = conn.flush();
-            });
-            expect_response(&mut stream, "200 Command okay.\r\n");
-            stream
-                .write_all(&"STOR ./thing.txt\r\n".as_bytes())
-                .expect("writing everything");
-            expect_response(
-                &mut stream,
-                "150 File status okay; about to open data connection.\r\n",
-            );
-            expect_response(
-                &mut stream,
-                "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n",
-            );
-            join.join().unwrap();
+            upload_hello_world(srv, &mut stream);
             std::thread::sleep(Duration::from_millis(20));
         }
     }
@@ -931,6 +911,50 @@ mod ftp_server_testing {
             .write_all(&"MKD /test\r\n".as_bytes())
             .expect("writing everything");
         expect_response(&mut stream, "257 'test' directory created.\r\n");
+    }
+
+    fn upload_hello_world(srv: TcpListener, stream: &mut TcpStream) {
+        let join = std::thread::spawn(move || {
+            let (mut conn, _) = srv.accept().expect("expect to receive connection");
+            for _i in 0..100 {
+                let buff = b"Hello World!\n";
+                conn.write_all(buff).expect("to have read");
+            }
+            let _ = conn.flush();
+        });
+        expect_response(stream, "200 Command okay.\r\n");
+        stream
+            .write_all(&"STOR ./thing.txt\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(
+            stream,
+            "150 File status okay; about to open data connection.\r\n",
+        );
+        expect_response(
+        stream,
+        "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n",
+    );
+        join.join().unwrap();
+    }
+
+    #[test]
+    fn create_file_delete() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_test_create_file_delete", "123456");
+        let srv = TcpListener::bind("127.0.0.1:2303").expect("to create server");
+        stream
+            .write_all(&"PORT 127,0,0,1,8,255\r\n".as_bytes())
+            .expect("writing everything");
+        upload_hello_world(srv, &mut stream);
+        stream
+            .write_all(&"DELE ./thing.txt\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(
+            &mut stream,
+            "250 Requested file action okay, completed.\r\n",
+        );
     }
 
     #[test]

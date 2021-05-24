@@ -111,7 +111,6 @@ impl SystemUsers {
 
         users_data.iter_mut().for_each(|(_, user)| {
             user.actual_dir = "./".to_string();
-
             user.create_dir();
         });
 

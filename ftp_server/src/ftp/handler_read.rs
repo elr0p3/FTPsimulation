@@ -332,6 +332,34 @@ impl HandlerRead {
                         })));
                     }
 
+                    Command::Delete(path) => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        if let Ok(path) = self.handle_user_path(path) {
+                            let result = fs::remove_file(path);
+                            if let Err(_err) = result {
+                                to_write.reset(create_response(
+                                    Response::file_unavailable(),
+                                    "Requested action not taken. File unavailable, file not found.",
+                                ));
+                                return Ok(None);
+                            } 
+                            to_write.reset(create_response(
+                                Response::file_action_okay(),
+                                "Requested file action okay, completed.",
+                            ));
+                            return Ok(None);
+                        }  else { 
+                            to_write.reset(create_response(
+                                Response::file_unavailable(),
+                                "Requested action not taken. File unavailable, file not found.",
+                            ));
+                            return Ok(None);
+                        }
+                    }
 
                     Command::Retr(path) => {
                         self.actions.push((

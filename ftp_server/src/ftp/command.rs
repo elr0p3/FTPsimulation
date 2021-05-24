@@ -28,6 +28,8 @@ pub enum Command<'a> {
     /// Creates dir on the specified path
     Mkdir(&'a Path),
 
+    Delete(&'a Path),
+
     /// Quit the connection
     Quit,
 }
@@ -120,6 +122,8 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
         // This is also done in compilers with switch statements, where they create
         // a trie of switches where they check if the word is a keyword.
         match command[0] {
+            b'D' => Ok(Command::Delete(parse_path(&command, b"ELE", (1, 4))?)),
+
             b'M' => Ok(Command::Mkdir(parse_path(&command, b"KD", (1, 3))?)),
 
             b'Q' => {
@@ -270,6 +274,11 @@ mod test {
             (
                 "MKD ./test/test/test1.txt\r\n".as_bytes(),
                 Command::Mkdir(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            (
+                "DELE ./test/test/test1.txt\r\n".as_bytes(),
+                Command::Delete(Path::new("./test/test/test1.txt")),
                 true,
             ),
             ("USER GABI\r\n".as_bytes(), Command::User("GABI"), true),
