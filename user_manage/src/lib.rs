@@ -74,7 +74,7 @@ impl User {
         }
     }
 
-    pub fn change_dir(&mut self, new_dir: &str) -> Result<(), &'static str> {
+    pub fn change_dir<P: AsRef<Path>>(&mut self, new_dir: P) -> Result<(), &'static str> {
         // Get root
         let root = Path::new(&self.chroot);
         // Get total path root
@@ -118,6 +118,15 @@ impl User {
             .join(&self.actual_dir)
             .canonicalize()
             .unwrap()
+    }
+
+    // Gets the total path of the user (in the system)
+    pub fn total_path_non_canon(&self) -> String {
+        Path::new(&self.chroot)
+            .join(&self.actual_dir)
+            .to_str()
+            .unwrap()
+            .to_string()
     }
 
     pub fn get_uid(&self) -> u16 {

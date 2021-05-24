@@ -110,7 +110,7 @@ impl HandlerRead {
         let user_id = self.user_id.as_ref().unwrap();
         let db = self.users_db.lock().unwrap();
         let user = db.get_user(user_id)?;        
-        Some(user.get_chroot().clone())
+        Some(user.total_path_non_canon())
     } 
 
     pub fn handle_user_path(&self, path: &Path) -> Result<String, ErrorTypeUser> {
@@ -206,6 +206,31 @@ impl HandlerRead {
                 }
 
                 match command {
+                    Command::ChangeDirectory(dir) => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        let mut users_db = self.users_db.lock().unwrap();
+                        let user = users_db.get_user_mut(self.user_id.as_ref().unwrap()).unwrap();
+                        let result = user.change_dir(dir);
+                        drop(user);
+                        drop(users_db);
+                        if result.is_err() {
+                            to_write.reset(create_response(
+                                Response::file_unavailable(),
+                                "Requested action not taken. File unavailable, file not found.",
+                            ));
+                            return Ok(None);
+                        } 
+                        to_write.reset(create_response(
+                            Response::file_action_okay(),
+                            "Requested file action okay, completed.",
+                        ));
+                        return Ok(None);
+                    }
+
                     Command::Passive => {
                         self.actions.push((
                             self.connection_token,
@@ -295,7 +320,7 @@ impl HandlerRead {
                         return Ok(None);
                     }
 
-                    Command::User(username) => {
+                    Command::User(username) => {                        
                         println!(
                             "[HANDLE_READ] {} - New user {}",
                             self.connection_token.0, username
@@ -352,7 +377,6 @@ impl HandlerRead {
                             Interest::WRITABLE,
                         ));
                         if let Ok(path) = self.handle_user_path(directory) {
-                            println!("{}", path);
                             let result = fs::remove_dir_all(path);
                             if let Err(_err) = result {
                                 to_write.reset(create_response(
@@ -517,7 +541,12 @@ impl HandlerRead {
                             return Ok(None);
                         }
                         let base = path_user.unwrap();
-                        let root_path = Path::new(base.as_str()).canonicalize().unwrap();
+                        let root_path = Path::new(base.as_str()).canonicalize();
+                        if root_path.is_err() {                            
+                            callback_error();
+                            return Ok(None);
+                        }
+                        let root_path = root_path.unwrap();
                         let true_base = root_path.to_str().unwrap();
                         let parent = path.parent();
                         let child = path.file_name();
@@ -526,7 +555,9 @@ impl HandlerRead {
                             return Ok(None);
                         }
                         let child = child.unwrap();
-                        let total_path = root_path.join(parent.unwrap_or(Path::new("./"))).canonicalize();
+                        let r = root_path.join(parent.unwrap_or(Path::new("./")));
+                        println!("{:?}", r);
+                        let total_path = r.canonicalize();
                         if let Ok(path) = total_path {
                             if !path.starts_with(true_base) {
                                 callback_error();
@@ -557,25 +588,26 @@ impl HandlerRead {
                                     {
                                         callback_error();
                                         return Ok(None);
-                                    } else {
-                                        // HEH... I don't know but Rust doesn't get that this really needs to die here!
-                                        drop(conn_lock);
-                                        to_write.reset(create_response(
-                                            Response::file_status_okay(),
-                                            "File status okay; about to open data connection.",
-                                        ));
-                                        to_write.callback_after_sending =
-                                            Some(Box::new(move || {                                         
-                                                let mut actions = actions.lock().unwrap();
-                                                actions.push((token_data, conn, Interest::READABLE));
-                                            }));
                                     }
+                                    // HEH... I don't know but Rust doesn't get that this really needs to die here!
+                                    drop(conn_lock);
+                                    to_write.reset(create_response(
+                                        Response::file_status_okay(),
+                                        "File status okay; about to open data connection.",
+                                    ));
+                                    to_write.callback_after_sending =
+                                        Some(Box::new(move || {                                         
+                                            let mut actions = actions.lock().unwrap();
+                                            actions.push((token_data, conn, Interest::READABLE));
+                                        }));                            
                                     return Ok(None);
                                 }
                             }
                             callback_error();
                             return Ok(None);
-                        }
+                        } 
+                        callback_error();       
+                        return Ok(None);                 
                     }
 
                     Command::List(path) => {

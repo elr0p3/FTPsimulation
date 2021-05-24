@@ -32,6 +32,9 @@ pub enum Command<'a> {
 
     RemoveDirectory(&'a Path),
 
+    /// Similar to CD in Unix, the FTP command is CWD
+    ChangeDirectory(&'a Path),
+
     /// Quit the connection
     Quit,
 }
@@ -40,13 +43,14 @@ impl<'a> Command<'a> {
     /// Returns if this command needs authentication in the FTP protocol
     pub fn is_auth_command(&self) -> bool {
         match self {
-            Command::Port(_, _)
-            | Command::List(_)
-            | Command::Retr(_)
+            &Command::Port(_, _)
+            | &Command::List(_)
+            | &Command::Retr(_)
             | &Command::Mkdir(_)
             | &Command::Store(_)
             | &Command::Delete(_)
-            | &Command::RemoveDirectory(_) => true,
+            | &Command::RemoveDirectory(_)
+            | &Command::ChangeDirectory(_) => true,
             _ => false,
         }
     }
@@ -126,6 +130,12 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
         // This is also done in compilers with switch statements, where they create
         // a trie of switches where they check if the word is a keyword.
         match command[0] {
+            b'C' => Ok(Command::ChangeDirectory(parse_path(
+                &command,
+                b"WD",
+                (1, 3),
+            )?)),
+
             b'D' => Ok(Command::Delete(parse_path(&command, b"ELE", (1, 4))?)),
 
             b'M' => Ok(Command::Mkdir(parse_path(&command, b"KD", (1, 3))?)),
@@ -286,6 +296,11 @@ mod test {
             (
                 "MKD ./test/test/test1.txt\r\n".as_bytes(),
                 Command::Mkdir(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            (
+                "CWD ./test/test/test1.txt\r\n".as_bytes(),
+                Command::ChangeDirectory(Path::new("./test/test/test1.txt")),
                 true,
             ),
             (

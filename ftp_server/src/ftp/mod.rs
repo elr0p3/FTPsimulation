@@ -936,10 +936,61 @@ mod ftp_server_testing {
             "150 File status okay; about to open data connection.\r\n",
         );
         expect_response(
-        stream,
-        "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n",
-    );
+            stream,
+            "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n",
+        );
         join.join().unwrap();
+    }
+
+    #[test]
+    fn cwd_test() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_test_cwd_test", "123456");
+        let srv = TcpListener::bind("127.0.0.1:2302").expect("to create server");
+        stream
+            .write_all(&"PORT 127,0,0,1,8,254\r\n".as_bytes())
+            .expect("writing everything");
+        upload_hello_world(srv, &mut stream);
+        stream
+            .write_all(&"MKD /test\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(&mut stream, "257 'test' directory created.\r\n");
+        std::thread::sleep(Duration::from_micros(100));
+        stream
+            .write_all(&"CWD ./test\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(
+            &mut stream,
+            "250 Requested file action okay, completed.\r\n",
+        );
+        let srv = TcpListener::bind("127.0.0.1:2302").expect("to create server");
+        stream
+            .write_all(&"PORT 127,0,0,1,8,254\r\n".as_bytes())
+            .expect("writing everything");
+        upload_hello_world(srv, &mut stream);
+        stream
+            .write_all(&"DELE ../thing.txt\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(
+            &mut stream,
+            "250 Requested file action okay, completed.\r\n",
+        );
+        stream
+            .write_all(&"CWD ../\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(
+            &mut stream,
+            "250 Requested file action okay, completed.\r\n",
+        );
+        stream
+            .write_all(&"RMD ./test\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(
+            &mut stream,
+            "250 Requested file action okay, completed.\r\n",
+        );
     }
 
     #[test]
