@@ -901,8 +901,6 @@ mod ftp_server_testing {
 
     #[test]
     fn mkdir() {
-        // We could reduce these steps to functions and reuse them but its ok
-        // at the moment
         let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
@@ -911,6 +909,13 @@ mod ftp_server_testing {
             .write_all(&"MKD /test\r\n".as_bytes())
             .expect("writing everything");
         expect_response(&mut stream, "257 'test' directory created.\r\n");
+        stream
+            .write_all(&"RMD /test\r\n".as_bytes())
+            .expect("writing everything");
+        expect_response(
+            &mut stream,
+            "250 Requested file action okay, completed.\r\n",
+        );
     }
 
     fn upload_hello_world(srv: TcpListener, stream: &mut TcpStream) {

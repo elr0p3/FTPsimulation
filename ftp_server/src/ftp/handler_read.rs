@@ -20,7 +20,7 @@ use std::{
     io::{Error, Write},
     net::Shutdown,
 };
-use user_manage::SystemUsers;
+use user_manage::{SystemUsers, User};
 
 pub struct HandlerRead {
     /// The request context token
@@ -120,24 +120,8 @@ impl HandlerRead {
         if let None = user {
             return Err(ErrorTypeUser::UserNotFound);
         }
-        let user = user.unwrap();
-        let p = user.total_path();
-        let p = p.to_str().unwrap();
-
-        let base = format!("{}", p);
-        drop(db);
-        let root_path = Path::new(base.as_str()).canonicalize().unwrap();
-        let true_base = root_path.to_str().unwrap();
-        let total_path = root_path.join(path).canonicalize();
-        if let Ok(path) = total_path {
-            if !path.starts_with(true_base) {
-                Err(ErrorTypeUser::PathNotFound)
-            } else {
-                Ok(path.to_str().unwrap().to_string())
-            }
-        } else {
-            Err(ErrorTypeUser::PathNotFound)
-        }
+        let user = user.unwrap();       
+        User::new_dir(&&user.get_chroot(), &&user.get_actual_dir(), path).map_err(|_| ErrorTypeUser::PathNotFound)        
     }
 
     /// This function handles the read of the `request_type`,
@@ -340,6 +324,36 @@ impl HandlerRead {
                         ));
                         if let Ok(path) = self.handle_user_path(path) {
                             let result = fs::remove_file(path);
+                            if let Err(_err) = result {
+                                to_write.reset(create_response(
+                                    Response::file_unavailable(),
+                                    "Requested action not taken. File unavailable, file not found.",
+                                ));
+                                return Ok(None);
+                            } 
+                            to_write.reset(create_response(
+                                Response::file_action_okay(),
+                                "Requested file action okay, completed.",
+                            ));
+                            return Ok(None);
+                        }  else { 
+                            to_write.reset(create_response(
+                                Response::file_unavailable(),
+                                "Requested action not taken. File unavailable, file not found.",
+                            ));
+                            return Ok(None);
+                        }
+                    }
+
+                    Command::RemoveDirectory(directory) => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        if let Ok(path) = self.handle_user_path(directory) {
+                            println!("{}", path);
+                            let result = fs::remove_dir_all(path);
                             if let Err(_err) = result {
                                 to_write.reset(create_response(
                                     Response::file_unavailable(),

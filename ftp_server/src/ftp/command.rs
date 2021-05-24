@@ -30,6 +30,8 @@ pub enum Command<'a> {
 
     Delete(&'a Path),
 
+    RemoveDirectory(&'a Path),
+
     /// Quit the connection
     Quit,
 }
@@ -42,7 +44,9 @@ impl<'a> Command<'a> {
             | Command::List(_)
             | Command::Retr(_)
             | &Command::Mkdir(_)
-            | &Command::Store(_) => true,
+            | &Command::Store(_)
+            | &Command::Delete(_)
+            | &Command::RemoveDirectory(_) => true,
             _ => false,
         }
     }
@@ -156,7 +160,15 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
                 Ok(Command::List(path))
             }
 
-            b'R' => Ok(Command::Retr(parse_path(&command, b"ETR", (1, 4))?)),
+            b'R' => match command[1] {
+                b'E' => Ok(Command::Retr(parse_path(&command, b"TR", (2, 4))?)),
+                b'M' => Ok(Command::RemoveDirectory(parse_path(
+                    &command,
+                    b"D",
+                    (2, 3),
+                )?)),
+                _ => return Err("Unknown command, maybe you meant 'RETR' or 'RMD'?"),
+            },
 
             b'S' => Ok(Command::Store(parse_path(&command, b"TOR", (1, 4))?)),
 
@@ -274,6 +286,11 @@ mod test {
             (
                 "MKD ./test/test/test1.txt\r\n".as_bytes(),
                 Command::Mkdir(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            (
+                "RMD ./test/test/test1.txt\r\n".as_bytes(),
+                Command::RemoveDirectory(Path::new("./test/test/test1.txt")),
                 true,
             ),
             (

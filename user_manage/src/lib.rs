@@ -43,6 +43,37 @@ impl User {
         return self.total_path() == Path::new(path).canonicalize().unwrap();
     }
 
+    /// Same behaviour as change_dir but returning the expected path
+    pub fn new_dir<'a>(
+        chroot: &'a str,
+        actual_dir: &str,
+        new_dir: &'a Path,
+    ) -> Result<String, &'static str> {
+        // Get root
+        let root = Path::new(chroot);
+        // Get total path root
+        let expected_root = root.canonicalize().unwrap();
+        // Path buffer to build directory
+        let mut path_buf: PathBuf = PathBuf::new();
+        path_buf.push(actual_dir);
+        path_buf.push(new_dir);
+        // Final path making sure it's not absolute
+        let final_path = format!("./{}", path_buf.to_str().unwrap());
+        // Join with root
+        let path = root.join(final_path.clone());
+        println!("{:?}", path);
+        // Get total path
+        let total_path = path.canonicalize().map_err(|_| "Directory not found")?;
+        // Check if it's valid (doesn't exit the chroot)
+        let valid_dir = total_path.starts_with(&expected_root);
+        if valid_dir {
+            let p = total_path.to_str().unwrap();
+            Ok(p.to_string())
+        } else {
+            Err("Invalid directory")
+        }
+    }
+
     pub fn change_dir(&mut self, new_dir: &str) -> Result<(), &'static str> {
         // Get root
         let root = Path::new(&self.chroot);
