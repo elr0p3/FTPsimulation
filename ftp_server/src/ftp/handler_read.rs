@@ -45,6 +45,7 @@ pub struct HandlerRead {
     loged: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum ErrorTypeUser {
     PathNotFound,
     UserNotFound
@@ -76,7 +77,7 @@ impl HandlerRead {
         file: File,
     ) -> Result<(), Error> {
         match &mut ctx.request_type {
-            RequestType::CommandTransfer(_, _, _) | RequestType::Closed(_) => {
+            RequestType::CommandTransfer(_, _, _, _) | RequestType::Closed(_) => {
                 Err(Error::from(ErrorKind::NotFound))
             }
             RequestType::FileTransferPassive(_stream, ftt, _)
@@ -94,7 +95,7 @@ impl HandlerRead {
         file: File,
     ) -> Result<(), Error> {
         match &mut ctx.request_type {
-            RequestType::CommandTransfer(_, _, _) | RequestType::Closed(_) => {
+            RequestType::CommandTransfer(_, _, _, _) | RequestType::Closed(_) => {
                 Err(Error::from(ErrorKind::NotFound))
             }
             RequestType::FileTransferPassive(_stream, ftt, _)
@@ -120,7 +121,7 @@ impl HandlerRead {
         user.total_path_and_decano().to_string()
     } 
 
-    pub fn handle_user_path(&self, path: &Path) -> Result<String, ErrorTypeUser> {
+    pub fn handle_user_path<P: AsRef<Path>>(&self, path: P) -> Result<String, ErrorTypeUser> {
         let user_id = self.user_id.as_ref().unwrap();
         let db = self.users_db.lock().unwrap();
         let user = db.get_user(user_id);
@@ -128,7 +129,7 @@ impl HandlerRead {
             return Err(ErrorTypeUser::UserNotFound);
         }
         let user = user.unwrap();       
-        User::new_dir(&&user.get_chroot(), &&user.get_actual_dir(), path).map_err(|_| ErrorTypeUser::PathNotFound)        
+        User::new_dir(&&user.get_chroot(), &&user.get_actual_dir(), path.as_ref()).map_err(|_| ErrorTypeUser::PathNotFound)        
     }
 
     /// This function handles the read of the `request_type`,
@@ -143,7 +144,7 @@ impl HandlerRead {
         next_id: usize,
     ) -> Result<Option<Box<dyn FnOnce(&mut RequestContext) + Send>>, Error> {
         match request_type {
-            RequestType::CommandTransfer(stream, to_write, data_connection) => {
+            RequestType::CommandTransfer(stream, to_write, data_connection, path_from) => {
                 let _ = stream.flush();
 
                 // Initialize a big buffer
@@ -213,6 +214,51 @@ impl HandlerRead {
                 }
 
                 match command {
+                    Command::RenameFrom(from) => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        if let Ok(path) = self.handle_user_path(from) {
+                            *path_from = Some(path);
+                            to_write.reset(create_response(
+                                Response::file_action_pending(), "Requested file action pending further information."));
+                            return Ok(None);
+                        }
+                        to_write.reset(create_response(
+                            Response::file_unavailable(), "File unavailable, file not found."));
+                    } 
+
+                    Command::RenameTo(to) => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        if let Some(from) = path_from.take() {
+                            let mut to_no_child = Path::new(to.clone()).to_path_buf();
+                            to_no_child.pop();
+                            let to_path = self.handle_user_path(to_no_child);                            
+                            let from = Path::new(&from);
+                            let to_child = to.file_name();
+                            if !(to_path.is_err() || to_child.is_none()) {
+                                let to_path = to_path.expect("safe");
+                                let to = format!("{}/{}", to_path, to_child.unwrap().to_str().unwrap());              
+                                let rename_result = system::rename(from.to_str().unwrap(), to.as_str());
+                                if rename_result.is_ok() {
+                                    to_write.reset(create_response(
+                                        Response::file_action_okay(),
+                                        "Requested file action okay, completed."
+                                    ));
+                                    return Ok(None);                                
+                                }               
+                                println!("{:?}", rename_result.unwrap_err());                  
+                            }
+                        } 
+                        to_write.reset_str("553 Requested action not taken. File name not allowed.\r\n");                                                
+                    }
+
                     Command::CurrentDirectory => {
                         self.actions.push((
                             self.connection_token,
@@ -294,7 +340,7 @@ impl HandlerRead {
                         let conn = self.connection.clone();
                         to_write.callback_after_sending = Some(Box::new(move || {
                             let connection = conn.lock().unwrap();
-                            if let RequestType::CommandTransfer(stream, _, _) =
+                            if let RequestType::CommandTransfer(stream, _, _, _) =
                                 &connection.request_type
                             {
                                 let _ = stream.shutdown(Shutdown::Both);
@@ -823,7 +869,7 @@ impl HandlerRead {
                 if let Some(cmd_connection) = cmd_connection {
                     // Clone arc so we can push interest 
                     let command_conn_arc = cmd_connection.clone();
-                    if let RequestType::CommandTransfer(_stream, buff, f) =
+                    if let RequestType::CommandTransfer(_stream, buff, f, _) =
                         &mut cmd_connection.lock().unwrap().request_type
                     {
                         *f = Some(Token(next_id));

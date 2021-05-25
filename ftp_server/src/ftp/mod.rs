@@ -117,7 +117,7 @@ pub enum RequestType {
     /// TcpStream of the connection
     /// BufferToWrite is the buffer that is gonna be written on Write mode
     /// Option<Token> is the opened PassiveModePort/FileTransferActive/FileTransferPassive
-    CommandTransfer(TcpStream, BufferToWrite, Option<Token>),
+    CommandTransfer(TcpStream, BufferToWrite, Option<Token>, Option<String>),
 
     /// This is the passive mode port that will accept connections
     /// It has a token where it references the CommandTransfer request_ctx
@@ -130,8 +130,9 @@ pub struct RequestContext {
     user_id: Option<String>,
 
     loged: bool,
-    // (note): would be cool to have here the user_id reference when creating the user
-    // socket_addr: SocketAddr,
+
+    /// Filled when the command receives the renamefrom command
+    path_from: Option<String>,
 }
 
 impl RequestContext {
@@ -140,6 +141,7 @@ impl RequestContext {
             request_type,
             user_id: None,
             loged: false,
+            path_from: None,
         }
     }
 }
@@ -240,7 +242,7 @@ impl FTPServer {
 
     fn deregister(&self, poll: &Poll, rc: &mut RequestContext) -> Result<(), Error> {
         match &mut rc.request_type {
-            RequestType::CommandTransfer(stream, _, _) => {
+            RequestType::CommandTransfer(stream, _, _, _) => {
                 poll.registry().deregister(stream)?;
             }
 
@@ -269,7 +271,7 @@ impl FTPServer {
                 let _ = stream.flush();
                 stream.shutdown(Shutdown::Both)?;
             }
-            RequestType::CommandTransfer(stream, _, _) => {
+            RequestType::CommandTransfer(stream, _, _, _) => {
                 let _ = stream.flush();
                 stream.shutdown(Shutdown::Both)?;
             }
@@ -338,6 +340,7 @@ impl TCPImplementation for FTPServer {
                     Response::service_ready(),
                     "Service ready for new user.",
                 )),
+                None,
                 None,
             ),
         );
@@ -565,7 +568,8 @@ impl TCPImplementation for FTPServer {
                         drop(db);
                         let mut actions = actions.lock().unwrap();
                         let mut cmd = command_conn.lock().unwrap();
-                        if let RequestType::CommandTransfer(_, to_write, _) = &mut cmd.request_type
+                        if let RequestType::CommandTransfer(_, to_write, _, _) =
+                            &mut cmd.request_type
                         {
                             to_write.reset(data);
                         }
@@ -584,7 +588,7 @@ impl TCPImplementation for FTPServer {
                 let _ = stream.shutdown(Shutdown::Both);
             }
 
-            RequestType::CommandTransfer(stream, _, conn) => {
+            RequestType::CommandTransfer(stream, _, conn, _) => {
                 println!(
                     "[CLOSE_CONNECTION] - {} - Closing connection command",
                     token.0
@@ -629,7 +633,7 @@ impl TCPImplementation for FTPServer {
         // Now delete it from the database
         if let Some(_) = self.connections.lock().unwrap().remove(&token) {
             println!("[CLOSE_CONNECTION] Successfully removing the connection.");
-            if let RequestType::CommandTransfer(_, _, _) = &conn.request_type {
+            if let RequestType::CommandTransfer(_, _, _, _) = &conn.request_type {
                 self.current_connections -= 1;
             }
             println!(
@@ -1030,6 +1034,18 @@ mod ftp_server_testing {
         expect_response(stream, "250 Requested file action okay, completed.\r\n");
     }
 
+    fn rnto(stream: &mut TcpStream, from: &str, to: &str) {
+        let from_cmd = format!("RNFR {}\r\n", from);
+        let to_cmd = format!("RNTO {}\r\n", to);
+        stream.write_all(from_cmd.as_bytes()).unwrap();
+        expect_response(
+            stream,
+            "350 Requested file action pending further information.\r\n",
+        );
+        stream.write_all(to_cmd.as_bytes()).unwrap();
+        expect_response(stream, "250 Requested file action okay, completed.\r\n");
+    }
+
     fn pwd(stream: &mut TcpStream, expected: &str) {
         stream.write_all(&"PWD\r\n".as_bytes()).unwrap();
         expect_response(stream, format!("257 {}\r\n", expected).as_str());
@@ -1076,6 +1092,23 @@ mod ftp_server_testing {
         pwd(&mut stream, "/thing/thing2");
         cwd(&mut stream, "../../");
         rmd(&mut stream, "/thing");
+    }
+
+    #[test]
+    fn rnto_test() {
+        // TODO:
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_rnto_test", "123456");
+        pwd(&mut stream, "/");
+        mkd(&mut stream, "/thing");
+        mkd(&mut stream, "/thing/thing2");
+        mkd(&mut stream, "/thing/thing2/thing3");
+        rnto(&mut stream, "/thing", "/thing5");
+        rnto(&mut stream, "/thing5/thing2", "/thing2");
+        rmd(&mut stream, "/thing2");
+        rmd(&mut stream, "/thing5");
     }
 
     #[test]

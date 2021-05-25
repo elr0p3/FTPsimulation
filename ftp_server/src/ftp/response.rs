@@ -93,6 +93,10 @@ impl Response {
         Response::new_from_enums(CodeFirst::Positive, CodeSecond::FileSystem, 0)
     }
 
+    pub fn file_action_pending() -> Response {
+        Response::new_from_enums(CodeFirst::PositiveIntermediate, CodeSecond::FileSystem, 0)
+    }
+
     pub fn directory_action_okay() -> Response {
         Response::new_from_enums(CodeFirst::Positive, CodeSecond::FileSystem, 7)
     }

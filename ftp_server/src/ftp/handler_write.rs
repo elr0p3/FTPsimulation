@@ -99,7 +99,7 @@ impl HandlerWrite {
                 stream.shutdown(Shutdown::Both)?;
             }
 
-            RequestType::CommandTransfer(stream, to_write, t) => {
+            RequestType::CommandTransfer(stream, to_write, t, path_from) => {
                 let maybe_error = stream.flush();
                 if let Err(err) = maybe_error {
                     println!("[HANDLE_WRITE] CMD Error flushing the stream: {}", err);
@@ -164,7 +164,7 @@ impl HandlerWrite {
         if let Some(cmd) = cmd {
             let cmd_arc = cmd.clone();
             let mut cmd = cmd_arc.lock().unwrap();
-            if let RequestType::CommandTransfer(_stream, to_write, t) = &mut cmd.request_type {
+            if let RequestType::CommandTransfer(_stream, to_write, t, _) = &mut cmd.request_type {
                 t.take();
                 to_write.reset(create_response(Response::closing_data_connection(), msg));
                 self.actions
@@ -269,7 +269,7 @@ impl HandlerWrite {
                 let command_connection = map_conn.get(&cmd_connection_token);
                 if let Some(command_connection) = command_connection {
                     let mut command_connection_mutex = command_connection.lock().unwrap();
-                    if let RequestType::CommandTransfer(_, buffer_to_write, t) =
+                    if let RequestType::CommandTransfer(_, buffer_to_write, t, _) =
                         &mut command_connection_mutex.request_type
                     {
                         t.take();

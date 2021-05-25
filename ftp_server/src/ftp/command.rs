@@ -38,6 +38,12 @@ pub enum Command<'a> {
     /// Similar to CD in Unix, the FTP command is CWD
     ChangeDirectory(&'a Path),
 
+    /// RNFR, indicates which filename or folder to rename
+    RenameFrom(&'a Path),
+
+    /// RNTO, indicates to which filename or the new path
+    RenameTo(&'a Path),
+
     /// Quit the connection
     Quit,
 }
@@ -181,6 +187,11 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
                     b"D",
                     (2, 3),
                 )?)),
+                b'N' => match command[2] {
+                    b'F' => Ok(Command::RenameFrom(parse_path(&command, b"R", (3, 4))?)),
+                    b'T' => Ok(Command::RenameTo(parse_path(&command, b"O", (3, 4))?)),
+                    _ => return Err("Unknown command"),
+                },
                 _ => return Err("Unknown command, maybe you meant 'RETR' or 'RMD'?"),
             },
 
@@ -321,6 +332,16 @@ mod test {
             (
                 "DELE ./test/test/test1.txt\r\n".as_bytes(),
                 Command::Delete(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            (
+                "RNFR ./test/test/test1.txt\r\n".as_bytes(),
+                Command::RenameFrom(Path::new("./test/test/test1.txt")),
+                true,
+            ),
+            (
+                "RNTO ./test/test/test1.txt\r\n".as_bytes(),
+                Command::RenameTo(Path::new("./test/test/test1.txt")),
                 true,
             ),
             ("USER GABI\r\n".as_bytes(), Command::User("GABI"), true),

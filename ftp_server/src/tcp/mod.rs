@@ -85,7 +85,7 @@ fn handle_request_type(
     let mut r = request.lock().unwrap();
     match &mut r.request_type {
         RequestType::Closed(stream)
-        | RequestType::CommandTransfer(stream, _, _)
+        | RequestType::CommandTransfer(stream, _, _, _)
         | RequestType::FileTransferActive(stream, _, _)
         | RequestType::FileTransferPassive(stream, _, _) => {
             if interest == Interest::AIO {
