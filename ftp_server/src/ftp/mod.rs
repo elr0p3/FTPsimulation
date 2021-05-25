@@ -526,6 +526,7 @@ impl TCPImplementation for FTPServer {
         };
         drop(map_conn);
         let mut conn = conn.lock().unwrap();
+        let user_name = conn.user_id.clone();
         match &mut conn.request_type {
             RequestType::Closed(stream) => {
                 let _ = poll.registry().deregister(stream);
@@ -593,6 +594,14 @@ impl TCPImplementation for FTPServer {
                 let _ = stream.flush();
                 let _ = stream.shutdown(Shutdown::Both);
                 let conn = conn.take();
+                if let Some(user_name) = user_name {
+                    let mut user_db = self.user_repository.lock().unwrap();
+                    let u = user_db.get_user_mut(&user_name);
+                    if let Some(user) = u {
+                        let _ = user.change_dir("/");
+                    }
+                }
+
                 if let Some(conn) = &conn {
                     let mut map_conn = map_conn_arc.lock().unwrap();
                     let connection = map_conn.get_mut(conn);
@@ -1011,6 +1020,62 @@ mod ftp_server_testing {
             &mut stream,
             "250 Requested file action okay, completed.\r\n",
         );
+    }
+
+    fn cwd(stream: &mut TcpStream, str: &str) {
+        let to_send = format!("{} {}\r\n", "CWD", str);
+        stream
+            .write_all(to_send.as_bytes())
+            .expect("writing everything");
+        expect_response(stream, "250 Requested file action okay, completed.\r\n");
+    }
+
+    fn pwd(stream: &mut TcpStream, expected: &str) {
+        stream.write_all(&"PWD\r\n".as_bytes()).unwrap();
+        expect_response(stream, format!("257 {}\r\n", expected).as_str());
+    }
+
+    use std::path::Path;
+
+    fn mkd(stream: &mut TcpStream, path: &str) {
+        let to_send = format!("{} {}\r\n", "MKD", path);
+        stream
+            .write_all(to_send.as_bytes())
+            .expect("writing everything");
+        let s = Path::new(path).file_name().unwrap().to_str().unwrap();
+        let expected = format!("257 '{}' directory created.\r\n", s);
+        expect_response(stream, &expected);
+    }
+
+    fn rmd(stream: &mut TcpStream, path: &str) {
+        let to_send = format!("{} {}\r\n", "RMD", path);
+        stream
+            .write_all(to_send.as_bytes())
+            .expect("writing everything");
+        expect_response(stream, "250 Requested file action okay, completed.\r\n");
+    }
+
+    //cargo test --package ftp_server --bin ftp_server -- ftp::ftp_server_testing::pwd_test --exact --nocapture
+    #[test]
+    fn pwd_test() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_pwd_test", "123456");
+        pwd(&mut stream, "/");
+        mkd(&mut stream, "/thing");
+        mkd(&mut stream, "/thing/thing2");
+        mkd(&mut stream, "/thing/thing2/thing3");
+        cwd(&mut stream, "/thing");
+        mkd(&mut stream, "./thing4");
+        rmd(&mut stream, "./thing4");
+        pwd(&mut stream, "/thing");
+        cwd(&mut stream, "./thing2");
+        pwd(&mut stream, "/thing/thing2");
+        cwd(&mut stream, "/thing/thing2");
+        pwd(&mut stream, "/thing/thing2");
+        cwd(&mut stream, "../../");
+        rmd(&mut stream, "/thing");
     }
 
     #[test]

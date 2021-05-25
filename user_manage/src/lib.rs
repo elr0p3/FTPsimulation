@@ -120,6 +120,22 @@ impl User {
             .unwrap()
     }
 
+    pub fn total_path_and_decano(&self) -> String {
+        let t = self.total_path().to_str().unwrap().replacen(
+            Path::new(&self.chroot)
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "",
+            1,
+        );
+        if t == "" {
+            return String::from("/");
+        }
+        t
+    }
+
     // Gets the total path of the user (in the system)
     pub fn total_path_non_canon(&self) -> String {
         Path::new(&self.chroot)

@@ -19,6 +19,9 @@ pub enum Command<'a> {
 
     Password(&'a str),
 
+    // PWD, returns the current directory!
+    CurrentDirectory,
+
     /// STOR command that passes a path where the user wants a download
     Store(&'a Path),
 
@@ -50,6 +53,7 @@ impl<'a> Command<'a> {
             | &Command::Store(_)
             | &Command::Delete(_)
             | &Command::RemoveDirectory(_)
+            | &Command::CurrentDirectory
             | &Command::ChangeDirectory(_) => true,
             _ => false,
         }
@@ -184,6 +188,12 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
 
             b'P' => {
                 match command[1] {
+                    b'W' => {
+                        if command[2] != b'D' || command.len() != 5 {
+                            return Err("Unknown command");
+                        }
+                        return Ok(Command::CurrentDirectory);
+                    }
                     b'A' => match command[2] {
                         b'S' => match command[3] {
                             b'V' => {
@@ -216,8 +226,8 @@ impl<'a> TryFrom<&'a [u8]> for Command<'a> {
                             "Expected space in between command and the rest.",
                         )?;
 
-                        let mut ip_addr = [0u8; 4];
-                        let mut port = [0u8; 2];
+                        let mut ip_addr = [0_u8; 4];
+                        let mut port = [0_u8; 2];
                         let mut byte_idx = 5;
 
                         // Parse IP + port
@@ -320,6 +330,7 @@ mod test {
                 true,
             ),
             ("PASV\r\n".as_bytes(), Command::Passive, true),
+            ("PWD\r\n".as_bytes(), Command::CurrentDirectory, true),
             ("PASS GABI\r\n".as_bytes(), Command::Password("GABI"), true),
             (
                 "PASS GABI_is_COOL\r\n".as_bytes(),

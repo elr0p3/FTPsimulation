@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 // use crate::stats::program_information;
 
 const SERVER: Token = Token(0);
-const THREAD: Token = Token(2147483647);
+const THREAD: Token = Token(2_147_483_647);
 
 // pub fn convert_to_server(id: u64) -> u64 {
 //     id | (1 << 63)
@@ -156,7 +156,7 @@ pub fn create_server<T: AsRef<str>>(
                     // is ready to be accepted.
                     loop {
                         match server.accept() {
-                            Ok((stream, _addr)) => {
+                            Ok((stream, _)) => {
                                 if let Err(_) = tcp_implementation.new_connection(
                                     SERVER,
                                     Token(id),

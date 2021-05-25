@@ -110,7 +110,14 @@ impl HandlerRead {
         let user_id = self.user_id.as_ref().unwrap();
         let db = self.users_db.lock().unwrap();
         let user = db.get_user(user_id)?;        
-        Some(user.total_path_non_canon())
+        Some(user.get_chroot().to_string())
+    } 
+
+    pub fn get_user_path_non_canon(&self) -> String {
+        let user_id = self.user_id.as_ref().unwrap();
+        let db = self.users_db.lock().unwrap();
+        let user = db.get_user(user_id).unwrap();        
+        user.total_path_and_decano().to_string()
     } 
 
     pub fn handle_user_path(&self, path: &Path) -> Result<String, ErrorTypeUser> {
@@ -206,6 +213,20 @@ impl HandlerRead {
                 }
 
                 match command {
+                    Command::CurrentDirectory => {
+                        self.actions.push((
+                            self.connection_token,
+                            self.connection.clone(),
+                            Interest::WRITABLE,
+                        ));
+                        let users_db = self.users_db.lock().unwrap();
+                        let user = users_db.get_user_clone(self.user_id.as_ref().unwrap()).unwrap();
+                        drop(users_db);
+                        to_write.reset(
+                            create_response(Response::directory_action_okay(), &user.total_path_and_decano())
+                        );
+                    }
+
                     Command::ChangeDirectory(dir) => {
                         self.actions.push((
                             self.connection_token,
@@ -488,21 +509,25 @@ impl HandlerRead {
                         let base = path_user.unwrap();
                         let root_path = Path::new(base.as_str()).canonicalize().unwrap();
                         let true_base = root_path.to_str().unwrap();
-                        let parent = path.parent();
-                        let child = path.file_name();
+                        let mut path = path.to_path_buf();
+                        let child = path.file_name().map(|el| el.to_str().unwrap().to_string()).clone();
+                        path.pop();
+                        let el = path.as_path();
+                        let parent = if el == Path::new("/") { Path::new("./") } else { el };
                         if child.is_none() {
                             callback_error();
                             return Ok(None);
                         }
-                        let child = child.unwrap().to_str().unwrap();
-                        let parent = parent.map(|el| if el == Path::new("/") { Path::new("./") } else { el }).unwrap_or(Path::new("./"));
-                        let total_path = root_path.join(parent).canonicalize();
+                        let child = child.unwrap();                                            
+                        let parent = Path::new(self.get_user_path_non_canon().as_str()).join(parent);
+                        let path = format!("./{}", parent.to_str().unwrap());                        
+                        let total_path = root_path.join(path).canonicalize();
                         if let Ok(path) = total_path {
                             if !path.starts_with(true_base) {
                                 callback_error();
                                 return Ok(None);
                             }
-                            let end_path = path.join(child);
+                            let end_path = path.join(&child);
                             let result = std::fs::create_dir(end_path);
                             if result.is_err() {
                                 callback_error();
@@ -545,19 +570,22 @@ impl HandlerRead {
                         if root_path.is_err() {                            
                             callback_error();
                             return Ok(None);
-                        }
-                        let root_path = root_path.unwrap();
+                        }                           
+                        let root_path = root_path.unwrap();                 
                         let true_base = root_path.to_str().unwrap();
-                        let parent = path.parent();
-                        let child = path.file_name();
+                        let mut path = path.to_path_buf();
+                        let child = path.file_name().map(|el| el.to_str().unwrap().to_string()).clone();
+                        path.pop();
+                        let el = path.as_path();
+                        let parent = if el == Path::new("/") { Path::new("./") } else { el };
                         if child.is_none() {
                             callback_error();
                             return Ok(None);
                         }
-                        let child = child.unwrap();
-                        let r = root_path.join(parent.unwrap_or(Path::new("./")));
-                        println!("{:?}", r);
-                        let total_path = r.canonicalize();
+                        let child = child.unwrap();                                            
+                        let parent = Path::new(self.get_user_path_non_canon().as_str()).join(parent);
+                        let path = format!("./{}", parent.to_str().unwrap());
+                        let total_path = root_path.join(path).canonicalize();
                         if let Ok(path) = total_path {
                             if !path.starts_with(true_base) {
                                 callback_error();
