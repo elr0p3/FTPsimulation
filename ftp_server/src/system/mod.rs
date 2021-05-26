@@ -83,7 +83,6 @@ pub fn rename<P: AsRef<Path>>(from: P, to: P) -> io::Result<()> {
             fs::remove_file(original_from)
         }
     } else {
-        println!("rename");
         fs::rename(original_from, original_to)
     }
 }
