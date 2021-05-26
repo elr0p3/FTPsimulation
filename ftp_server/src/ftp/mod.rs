@@ -653,6 +653,7 @@ impl TCPImplementation for FTPServer {
 
 #[cfg(test)]
 mod ftp_server_testing {
+    use crate::port;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::net::TcpStream;
@@ -912,6 +913,44 @@ mod ftp_server_testing {
         }
     }
 
+    fn upload_active<'a>(stream: &mut TcpStream, to: &'a str, from: &'static str, port: u16) {
+        let conn = format!("127.0.0.1:{}", port);
+        let srv = TcpListener::bind(conn).expect("to create server");
+        let (first, second) = port::get_ftp_port_pair(port);
+        let command = format!("PORT 127,0,0,1,{},{}\r\n", first, second);
+        stream
+            .write_all(&command.as_bytes())
+            .expect("writing everything");
+        let join = std::thread::spawn(move || {
+            let mut f = std::fs::OpenOptions::new().read(true).open(from).unwrap();
+            let (mut conn, _) = srv.accept().expect("expect to receive connection");
+            let mut buff = [0; 1024];
+            loop {
+                let r = f.read(&mut buff).expect("to have read");
+                if r == 0 {
+                    break;
+                }
+                let w = conn.write(&mut buff[0..r]).expect("to have read");
+                assert!(w == r);
+            }
+            drop(f);
+        });
+        expect_response(stream, "200 Command okay.\r\n");
+        let command = format!("STOR {}\r\n", to);
+        stream
+            .write_all(&command.as_bytes())
+            .expect("writing everything");
+        expect_response(
+            stream,
+            "150 File status okay; about to open data connection.\r\n",
+        );
+        expect_response(
+            stream,
+            "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n",
+        );
+        join.join().unwrap();
+    }
+
     #[test]
     fn mkdir() {
         let result = TcpStream::connect("127.0.0.1:8080");
@@ -1026,6 +1065,14 @@ mod ftp_server_testing {
         );
     }
 
+    fn dele(stream: &mut TcpStream, what: &str) {
+        let to_send = format!("{} {}\r\n", "DELE", what);
+        stream
+            .write_all(to_send.as_bytes())
+            .expect("writing everything");
+        expect_response(stream, "250 Requested file action okay, completed.\r\n");
+    }
+
     fn cwd(stream: &mut TcpStream, str: &str) {
         let to_send = format!("{} {}\r\n", "CWD", str);
         stream
@@ -1095,8 +1142,42 @@ mod ftp_server_testing {
     }
 
     #[test]
+    fn store_test() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_store_test", "123456");
+        mkd(&mut stream, "/thing");
+        mkd(&mut stream, "/thing/thing2");
+        upload_active(&mut stream, "./thing/1.jpeg", "./test_files/1.jpeg", 1777);
+        upload_active(
+            &mut stream,
+            "./thing/thing2/1.jpeg",
+            "./test_files/1.jpeg",
+            1777,
+        );
+        rmd(&mut stream, "/thing");
+    }
+
+    #[test]
+    fn store_2_test() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_store_2_test", "123456");
+        for i in 0..100 {
+            let s = format!("./{}.jpeg", i);
+            upload_active(&mut stream, &s, "./test_files/1.jpeg", 1778);
+        }
+
+        for i in 0..100 {
+            let s = format!("./{}.jpeg", i);
+            dele(&mut stream, &s);
+        }
+    }
+
+    #[test]
     fn rnto_test() {
-        // TODO:
         let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");

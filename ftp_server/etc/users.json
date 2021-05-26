@@ -1,38 +1,33 @@
 {
-  "user_test_create_file_delete": {
+  "user_test_image_transfer": {
     "passwd": "123456",
-    "chroot": "./root/user_test_create_file_delete",
-    "uid": 7
-  },
-  "user_test_it_works_2": {
-    "passwd": "123456",
-    "chroot": "./root/user_test_it_works_2",
-    "uid": 1
+    "chroot": "./root/user_test_image_transfer",
+    "uid": 2
   },
   "user_01": {
     "passwd": "123456",
     "chroot": "./root/user_01",
     "uid": 0
   },
-  "user_test_image_transfer": {
-    "passwd": "123456",
-    "chroot": "./root/user_test_image_transfer",
-    "uid": 2
-  },
-  "user_test_image_transfer_02": {
-    "passwd": "123456",
-    "chroot": "./root/user_test_image_transfer_02",
-    "uid": 4
-  },
   "user_test_mkdir_01": {
     "passwd": "123456",
     "chroot": "./root/user_test_mkdir_01",
     "uid": 6
   },
-  "user_pwd_test": {
+  "user_test_cwd_test": {
     "passwd": "123456",
-    "chroot": "./root/user_pwd_test",
-    "uid": 9
+    "chroot": "./root/user_test_cwd_test",
+    "uid": 8
+  },
+  "user_store_2_test": {
+    "passwd": "123456",
+    "chroot": "./root/user_store_2_test",
+    "uid": 12
+  },
+  "user_test_create_file_delete": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_create_file_delete",
+    "uid": 7
   },
   "user_012": {
     "passwd": "123456",
@@ -44,14 +39,29 @@
     "chroot": "./root/user_test_it_works_3",
     "uid": 3
   },
+  "user_pwd_test": {
+    "passwd": "123456",
+    "chroot": "./root/user_pwd_test",
+    "uid": 9
+  },
+  "user_store_test": {
+    "passwd": "123456",
+    "chroot": "./root/user_store_test",
+    "uid": 11
+  },
+  "user_test_it_works_2": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_it_works_2",
+    "uid": 1
+  },
   "user_rnto_test": {
     "passwd": "123456",
     "chroot": "./root/user_rnto_test",
     "uid": 10
   },
-  "user_test_cwd_test": {
+  "user_test_image_transfer_02": {
     "passwd": "123456",
-    "chroot": "./root/user_test_cwd_test",
-    "uid": 8
+    "chroot": "./root/user_test_image_transfer_02",
+    "uid": 4
   }
 }

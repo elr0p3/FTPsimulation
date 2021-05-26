@@ -365,8 +365,8 @@ mod test {
                 true,
             ),
             (
-                "PORT 255,255,100,100,40,20\r\n".as_bytes(),
-                Command::Port(Ipv4Addr::new(255, 255, 100, 100), 40 * 256 + 20),
+                "PORT 255,255,100,100,6,241\r\n".as_bytes(),
+                Command::Port(Ipv4Addr::new(255, 255, 100, 100), 6 * 256 + 241),
                 true,
             ),
             (
