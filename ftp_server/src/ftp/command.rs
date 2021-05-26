@@ -4,15 +4,17 @@ use std::{convert::TryFrom, net::Ipv4Addr, path::Path};
 pub enum Command<'a> {
     /// To initiate any data transfer in active mode, the client must send this command.
     /// The first 4 bytes is the host IPv4 addr. and the rest is the port number
-    ///  h1,h2,h3,h4,p1,p2
+    ///  PORT h1,h2,h3,h4,p1,p2
     Port(Ipv4Addr, u16),
 
     /// Pointer to string, which indicates the desired folder path
     /// ## Cases
     /// * './' | None -> ./
+    /// LIST <path>
     List(&'a Path),
 
     /// Pointer to string, which indicates the desired folder path
+    /// RETR <path>
     Retr(&'a Path),
 
     User(&'a str),
@@ -60,7 +62,9 @@ impl<'a> Command<'a> {
             | &Command::Delete(_)
             | &Command::RemoveDirectory(_)
             | &Command::CurrentDirectory
-            | &Command::ChangeDirectory(_) => true,
+            | &Command::ChangeDirectory(_)
+            | &Command::RenameTo(_)
+            | &Command::RenameFrom(_) => true,
             _ => false,
         }
     }
