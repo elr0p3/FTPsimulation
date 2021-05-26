@@ -88,19 +88,11 @@ fn handle_request_type(
         | RequestType::CommandTransfer(stream, _, _, _)
         | RequestType::FileTransferActive(stream, _, _)
         | RequestType::FileTransferPassive(stream, _, _) => {
-            if interest == Interest::AIO {
-                println!("deregister");
-            } else {
-                let _ = poll.registry().deregister(stream);
-                poll.registry().register(stream, token, interest)?;
-            }
+            let _ = poll.registry().deregister(stream);
+            poll.registry().register(stream, token, interest)?;
         }
         RequestType::PassiveModePort(stream, _) => {
-            if interest == Interest::AIO {
-                // poll.registry().deregister(stream)?;
-            } else {
-                poll.registry().register(stream, token, interest)?;
-            }
+            poll.registry().register(stream, token, interest)?;
         }
     }
     Ok(())
