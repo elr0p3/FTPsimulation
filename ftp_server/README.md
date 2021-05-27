@@ -114,10 +114,13 @@ OPTIONS:
     -p, --port <PORT>            Set port [default: 8080]
 ```
 
+- It's worth noting that there should be a root folder and etc folder
+  with a `users.json` file inside so the server doesn't crash, maybe we will provide the option to create those things by default, at the moment if you don't create those folders and files by yourself the server probably will crash :(.
+
 ### Testing
 
 ---
 
 - We are using the builtin tools for testing with cargo. `cargo test --release`
-- Note that you must run first the server to test the server. See `Running the server`.
-- The tests try to connect to the port 8080.
+- Note that you must run first the server to test the server (obviously). See `Running the server`.
+- The tests try to connect to the port 8080, just running the default server config on the root of the project is enough.
