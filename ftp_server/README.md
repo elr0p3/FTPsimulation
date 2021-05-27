@@ -93,7 +93,7 @@ QUIT<endline>
 We are building the project with the builtin package manager for Rust `cargo`, so you need a stable rust installation available.
 
 ```
->> cargo run --release
+>> cargo run --release -- -h
 
 FTP Server 1.0
 Gabriel Villalonga @gabivlj
