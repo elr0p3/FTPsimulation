@@ -7,7 +7,7 @@
 
 ### Implementation
 
-- Before doing anything you should send the following to the server authentification to the server
+- Before doing anything you should send the following to the server to authenticate the user
 
 ```
 ** NOTE: <endline> == \r\n
