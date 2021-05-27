@@ -1125,8 +1125,8 @@ mod ftp_server_testing {
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_recv_test", "123456");
-        upload_active(&mut stream, "./1.jpeg", "./test_files/1.jpeg", 1777);
-        recv_active(&mut stream, "./1.jpeg", "./test_files/2.jpeg", 1777);
+        upload_active(&mut stream, "./1.jpeg", "./test_files/1.jpeg", 1887);
+        recv_active(&mut stream, "./1.jpeg", "./test_files/2.jpeg", 1887);
         dele(&mut stream, "/1.jpeg");
     }
 
