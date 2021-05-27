@@ -670,6 +670,7 @@ impl HandlerRead {
                                 return Ok(None);
                             }
                             let end_path = path.join(child);
+                            let _ = fs::remove_file(&end_path);
                             let file_options = fs::OpenOptions::new()
                                 .append(false)
                                 .create(true)

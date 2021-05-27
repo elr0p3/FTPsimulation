@@ -1131,6 +1131,15 @@ mod ftp_server_testing {
     }
 
     #[test]
+    fn store_text_test() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_store_text_test", "123456");
+        upload_active(&mut stream, "./t.txt", "./test_files/hola.txt", 2777);
+    }
+
+    #[test]
     fn store_test() {
         let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
