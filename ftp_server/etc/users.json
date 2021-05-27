@@ -54,10 +54,10 @@
     "chroot": "./root/user_test_image_transfer",
     "uid": 2
   },
-  "user_test_it_works_3": {
+  "user_test_cwd_test": {
     "passwd": "123456",
-    "chroot": "./root/user_test_it_works_3",
-    "uid": 3
+    "chroot": "./root/user_test_cwd_test",
+    "uid": 8
   },
   "n": {
     "passwd": "n",
@@ -69,10 +69,10 @@
     "chroot": "./root/user_test_cwd_test",
     "uid": 8
   },
-  "user_pwd_test": {
+  "user_recv_test": {
     "passwd": "123456",
-    "chroot": "./root/user_pwd_test",
-    "uid": 9
+    "chroot": "./root/user_recv_test",
+    "uid": 14
   },
   "user_012": {
     "passwd": "123456",

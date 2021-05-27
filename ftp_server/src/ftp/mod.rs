@@ -310,9 +310,7 @@ impl TCPImplementation for FTPServer {
     ) -> Result<(), Error> {
         let token = event.token();
         print_stdout!("[WRITE_CONNECTION] - {} - Start Writing", token.0);
-        // TODO Make this a macro!
         let map_conn_arc = self.connections.clone();
-
         let map_conn = map_conn_arc.lock().unwrap();
         let connection = {
             let connection = map_conn.get(&token).ok_or(ErrorKind::NotFound)?;
@@ -356,9 +354,10 @@ impl TCPImplementation for FTPServer {
         event: &Event,
     ) -> Result<(), Error> {
         print_stdout!("[READ_CONNECTION] - {} - Start read", event.token().0);
-        // first read
+        // Connection database reference
         let map_conn = self.connections.clone();
         let map_conn = map_conn.lock().unwrap();
+        // Get request context
         let conn = {
             let connection = map_conn.get(&event.token()).ok_or(ErrorKind::NotFound)?;
             let arc = connection.clone();
@@ -366,6 +365,8 @@ impl TCPImplementation for FTPServer {
         };
         let token = event.token();
         drop(map_conn);
+        // Get the handler read component, basically in charge of reading and interpreting what is
+        // getting sent by the client
         let mut handler_read = {
             let conn_ref = &mut conn.lock().unwrap();
             self.deregister(poll, conn_ref)?;
@@ -378,8 +379,11 @@ impl TCPImplementation for FTPServer {
                 conn_ref.loged,
             )
         };
+        // Get action list mutex
         let actions = self.action_list();
+        // Next connection ID if we accept a new connection
         let next_id = self.next_id();
+        // Spawn thread
         spawn(move || {
             let connection_arc = conn.clone();
             let mut connection_mutex = connection_arc.lock().unwrap();
@@ -395,28 +399,7 @@ impl TCPImplementation for FTPServer {
                 is_would_block = err.kind() == ErrorKind::WouldBlock;
             }
             let is_error_for_closing_connection = is_err && !is_would_block;
-            if is_would_block {
-                if let Err(err) = response {
-                    fs::OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open("./debug.txt")
-                        .unwrap()
-                        .write(
-                            format!(
-                                "{:?} {:?}\n",
-                                err,
-                                handler_read
-                                    .actions
-                                    .iter()
-                                    .map(|e| e.2)
-                                    .collect::<Vec<Interest>>()
-                            )
-                            .as_bytes(),
-                        )
-                        .unwrap();
-                }
-            } else if is_error_for_closing_connection {
+            if is_error_for_closing_connection {
                 if let Err(err) = response {
                     print_stdout!(
                         "[READ_CONNECTION] - {} - Closing connection because error, {}",
@@ -513,7 +496,7 @@ impl TCPImplementation for FTPServer {
                     let waker = waker.clone();
                     // Tell the command socket to send some stuff
                     spawn(move || {
-                        print!(
+                        print_stdout!(
                             "[CLOSE_CONNECTION] - {} - Closing connection File Upload - {}",
                             token.0,
                             std::str::from_utf8(&data).unwrap()
@@ -907,6 +890,45 @@ mod ftp_server_testing {
         join.join().unwrap();
     }
 
+    fn recv_active<'a>(stream: &mut TcpStream, to: &'a str, from: &'static str, port: u16) {
+        let conn = format!("127.0.0.1:{}", port);
+        let srv = TcpListener::bind(conn).expect("to create server");
+        let (first, second) = port::get_ftp_port_pair(port);
+        let command = format!("PORT 127,0,0,1,{},{}\r\n", first, second);
+        stream
+            .write_all(&command.as_bytes())
+            .expect("writing everything");
+        let join = std::thread::spawn(move || {
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(from)
+                .unwrap();
+            let (mut conn, _) = srv.accept().expect("expect to receive connection");
+            let mut buff = [0; 1024];
+            loop {
+                let r = conn.read(&mut buff).expect("to have read");
+                if r == 0 {
+                    break;
+                }
+                let w = f.write(&mut buff[0..r]).expect("to have read");
+                assert!(w == r);
+            }
+            drop(f);
+        });
+        expect_response(stream, "200 Command okay.\r\n");
+        let command = format!("RETR {}\r\n", to);
+        stream
+            .write_all(&command.as_bytes())
+            .expect("writing everything");
+        expect_response(stream, "150 File download starts!\r\n");
+        expect_response(
+            stream,
+            "226 Closing data connection. Requested file action successful. (file transfer)\r\n",
+        );
+        join.join().unwrap();
+    }
+
     #[test]
     fn mkdir() {
         let result = TcpStream::connect("127.0.0.1:8080");
@@ -1095,6 +1117,26 @@ mod ftp_server_testing {
         pwd(&mut stream, "/thing/thing2");
         cwd(&mut stream, "../../");
         rmd(&mut stream, "/thing");
+    }
+
+    #[test]
+    fn recv_test() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_recv_test", "123456");
+        upload_active(&mut stream, "./1.jpeg", "./test_files/1.jpeg", 1887);
+        recv_active(&mut stream, "./1.jpeg", "./test_files/2.jpeg", 1887);
+        dele(&mut stream, "/1.jpeg");
+    }
+
+    #[test]
+    fn store_text_test() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_store_text_test", "123456");
+        upload_active(&mut stream, "./t.txt", "./test_files/hola.txt", 2777);
     }
 
     #[test]

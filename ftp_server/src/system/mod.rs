@@ -1,6 +1,6 @@
 use std::{
     io::{self, Error, ErrorKind},
-    path::Path,
+    path::{Component, Components, Path},
 };
 
 use std::fs;
@@ -14,7 +14,10 @@ pub fn ls(path: &str) -> Result<Vec<u8>, std::io::Error> {
             return;
         }
         let now = now.unwrap();
-        let str = format!("{}\r\n", now.path().to_str().unwrap());
+        let p = PathBuf::from(now.path());
+        let c = p.components();
+        let end_path = c.skip(2).collect::<PathBuf>();
+        let str = format!("{}\r\n", end_path.to_str().unwrap());
         buff.extend(str.as_bytes().iter());
     });
     Ok(buff)
