@@ -32,7 +32,7 @@ STOR <path><endline>
 
 ```
 -- Sends the desired file, will return an error if the path doesn't exist
-RECV <path><endline>
+RETR <path><endline>
 ```
 
 ```

@@ -109,6 +109,7 @@ impl HandlerRead {
         }
     }
 
+    /// Gets the chroot of the user *non canon
     pub fn get_user_path(&self) -> Option<String> {
         let user_id = self.user_id.as_ref().unwrap();
         let db = self.users_db.lock().unwrap();
@@ -116,6 +117,7 @@ impl HandlerRead {
         Some(user.get_chroot().to_string())
     } 
 
+    /// Returns the current user total path (non canon)
     pub fn get_user_path_non_canon(&self) -> String {
         let user_id = self.user_id.as_ref().unwrap();
         let db = self.users_db.lock().unwrap();
@@ -123,6 +125,7 @@ impl HandlerRead {
         user.total_path_and_decano().to_string()
     } 
 
+    /// Returns the new path of the user with the specified path
     pub fn handle_user_path<P: AsRef<Path>>(&self, path: P) -> Result<String, ErrorTypeUser> {
         let user_id = self.user_id.as_ref().unwrap();
         let db = self.users_db.lock().unwrap();
@@ -134,6 +137,7 @@ impl HandlerRead {
         User::new_dir(&&user.get_chroot(), &&user.get_actual_dir(), path.as_ref()).map_err(|_| ErrorTypeUser::PathNotFound)        
     }
 
+    /// Handles when the user is actually on a bad directory
     pub fn safe_change_dir_for_user(&mut self) {
         let user_id = self.user_id.as_ref().unwrap();
         let mut db = self.users_db.lock().unwrap();
@@ -149,6 +153,7 @@ impl HandlerRead {
     /// Will use `actions` for cloning its `Arc`, not for adquiring it
     /// `next_id` is assumed to be used, so the caller should provide always the next id
     /// Will return a possible callback that should be called when dropping the mutex_lock of the passed `request_type`
+    /// Might return WOULD_BLOCK so it needs to handle that case!
     pub fn handle_read(
         &mut self,
         request_type: &mut RequestType,
@@ -163,7 +168,7 @@ impl HandlerRead {
                 // Initialize a big buffer
                 let mut buff = [0; 10024];
 
-                // Read thing into the buffer TODO Handle block in multithread
+                // Read thing into the buffer
                 let read = stream.read(&mut buff)?;
 
                 if read == 0 {
@@ -181,14 +186,18 @@ impl HandlerRead {
                     self.connection_token.0, read
                 );
 
-                if !buff[0..read].contains(&b'\n') {
-                    panic!("NOT INCLUDED JL");
-                }
-
-                // Testing condition
                 if read >= buff.len() {
-                    // Just close connection if the request is too big at the moment
-                    return Err(Error::from(ErrorKind::Other));
+                    print_stdout!(
+                        "[HANDLE_READ] {} - command is too big, returning bad sequence of commands",
+                        self.connection_token.0
+                    );
+                    self.actions.push((
+                        self.connection_token,
+                        self.connection.clone(),
+                        Interest::WRITABLE,
+                    ));
+                    to_write.reset_str("503 Bad sequence of commands.\r\n");
+                    return Ok(None);
                 }
 
                 // Translate to Command enum
@@ -311,21 +320,28 @@ impl HandlerRead {
                     }
 
                     Command::Passive => {
+                        // We know that we will write to the command socket anyways, add an action interest
+                        // An array of actions is a list of a token of a socket, the socket, and the interest,
+                        // Then in the ftp module it will take the mutex of the action list that the TCP implementation is using
+                        // and add it
                         self.actions.push((
                             self.connection_token,
                             self.connection.clone(),
                             Interest::WRITABLE,
-                        ));
+                        ));                        
                         let random_port = get_random_port();
                         if let Some(port) = random_port {
+                            // Create tcp listener and add it to the connections database
                             let tcp_listener =
                                 TcpListener::bind(format!("0.0.0.0:{}", port).parse().unwrap())
                                     .expect("port to be init");
                             let mut db = self.connection_db.lock().unwrap();
+                            // Smart multithread safe pointer where we got a mutex of a socket
                             let arc = Arc::new(Mutex::new(RequestContext::new(
                                 RequestType::PassiveModePort(tcp_listener, self.connection_token),
-                            )));
+                            )));                            
                             db.insert(Token(next_id), arc.clone());
+                            // Mark the listener as readable so we can read new connections
                             self.actions.push((Token(next_id), arc, Interest::READABLE));
                             let (first_part, second_part) = get_ftp_port_pair(port);
                             to_write.reset_str(

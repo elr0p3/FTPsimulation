@@ -61,7 +61,6 @@ impl User {
         let final_path = format!("./{}", path_buf.to_str().unwrap());
         // Join with root
         let path = root.join(final_path.clone());
-        println!("{:?}", path);
         // Get total path
         let total_path = path.canonicalize().map_err(|_| "Directory not found")?;
         // Check if it's valid (doesn't exit the chroot)
