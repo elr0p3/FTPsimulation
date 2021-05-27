@@ -1,6 +1,6 @@
 ## FTP server done in Rust
 
-- This FTP implementation is done in Rust. It's just a proof of concept and an university work
+- This FTP implementation is done in Rust. It's just a proof of concept and university work
   so don't expect real use cases for this!
 - Simple to use FTP server, with multithreading and non-blocking behaviour in mind for maximum concurrent file transfers
   for multiple users.
@@ -11,13 +11,13 @@
 
 ```
 ** NOTE: <endline> == \r\n
-USER <username> <endline>
+USER <username><endline>
 ```
 
 - and...
 
 ```
-PASS <password> <endline>
+PASS <password><endline>
 ```
 
 - Note that the password being sent is not encrypted (be careful!).
@@ -27,17 +27,17 @@ PASS <password> <endline>
 
 ```
 -- Stores a file on the desired path, will return an error if the path doesn't exist.
-STOR <path> <endline>
+STOR <path><endline>
 ```
 
 ```
 -- Sends the desired file, will return an error if the path doesn't exist
-RECV <path> <endline>
+RECV <path><endline>
 ```
 
 ```
 -- Returns in a LS format the directories in the path.
-LIST <path> <endline>
+LIST <path><endline>
 ```
 
 ```
