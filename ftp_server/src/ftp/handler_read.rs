@@ -132,6 +132,17 @@ impl HandlerRead {
         User::new_dir(&&user.get_chroot(), &&user.get_actual_dir(), path.as_ref()).map_err(|_| ErrorTypeUser::PathNotFound)        
     }
 
+    pub fn safe_change_dir_for_user(&mut self) {
+        let user_id = self.user_id.as_ref().unwrap();
+        let mut db = self.users_db.lock().unwrap();
+        let user = db.get_user_mut(user_id);
+        if let None = user {
+            return;
+        }
+        let user = user.unwrap();   
+        user.change_dir_to_recursive_if_doesnt_exist();
+    }
+
     /// This function handles the read of the `request_type`,
     /// Will use `actions` for cloning its `Arc`, not for adquiring it
     /// `next_id` is assumed to be used, so the caller should provide always the next id
@@ -452,6 +463,10 @@ impl HandlerRead {
                                 ));
                                 return Ok(None);
                             } 
+
+                            // Check if the client is a bit dumbass and deleted its own directory
+                            self.safe_change_dir_for_user();
+
                             to_write.reset(create_response(
                                 Response::file_action_okay(),
                                 "Requested file action okay, completed.",

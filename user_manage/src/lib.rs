@@ -145,6 +145,17 @@ impl User {
             .to_string()
     }
 
+    pub fn change_dir_to_recursive_if_doesnt_exist(&mut self) {
+        while Path::new(&self.total_path_non_canon())
+            .canonicalize()
+            .is_err()
+        {
+            let mut p_buf = PathBuf::from(&self.actual_dir);
+            p_buf.pop();
+            self.actual_dir = p_buf.to_str().unwrap().to_string();
+        }
+    }
+
     pub fn get_uid(&self) -> u16 {
         self.uid
     }

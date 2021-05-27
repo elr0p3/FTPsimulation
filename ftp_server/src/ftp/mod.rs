@@ -1193,6 +1193,25 @@ mod ftp_server_testing {
     }
 
     #[test]
+    fn delete_its_own_directory_test() {
+        let result = TcpStream::connect("127.0.0.1:8080");
+        let mut stream = result.unwrap();
+        expect_response(&mut stream, "220 Service ready for new user.\r\n");
+        log_in(&mut stream, "user_delete_its_own_directory_test", "123456");
+        pwd(&mut stream, "/");
+        mkd(&mut stream, "/thing");
+        mkd(&mut stream, "/thing/thing2");
+        mkd(&mut stream, "/thing/thing2/thing3");
+        cwd(&mut stream, "/thing/thing2/thing3");
+        rmd(&mut stream, "../thing3");
+        pwd(&mut stream, "/thing/thing2");
+        rmd(&mut stream, "../thing2");
+        pwd(&mut stream, "/thing");
+        rmd(&mut stream, "../thing");
+        pwd(&mut stream, "/");
+    }
+
+    #[test]
     fn passive_connection() {
         // We could reduce these steps to functions and reuse them but its ok
         // at the moment
