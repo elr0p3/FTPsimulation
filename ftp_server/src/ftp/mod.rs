@@ -1,11 +1,13 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::Write,
+    io::{stdout, Write},
     path::Path,
 };
 
 mod command;
+#[macro_use]
+pub mod config;
 mod handler_read;
 mod handler_write;
 mod response;
@@ -193,6 +195,7 @@ impl FTPServer {
     }
 
     pub fn with_connection_capacity(max_connections: usize) -> Self {
+        print_stdout!("hola caracolas {}", 1);
         if !Path::new(ROOT).exists() {
             fs::create_dir(ROOT).expect("root dir hasn't been created");
         }
@@ -314,13 +317,13 @@ impl TCPImplementation for FTPServer {
         poll: &Poll,
         mut stream: TcpStream,
     ) -> Result<(), std::io::Error> {
-        println!(
+        print_stdout!(
             "[NEW_CONNECTION] {} - There is a brand new connection - Current connections: {} ",
             token.0,
             self.current_connections + 1
         );
         if self.max_connections <= self.current_connections {
-            println!(
+            print_stdout!(
                 "[NEW_CONNECTION] {} - Closing connection because it surpasses the maximum connections",
                 token.0
             );
@@ -354,7 +357,7 @@ impl TCPImplementation for FTPServer {
         event: &Event,
     ) -> Result<(), Error> {
         let token = event.token();
-        println!("[WRITE_CONNECTION] - {} - Start Writing", token.0);
+        print_stdout!("[WRITE_CONNECTION] - {} - Start Writing", token.0);
         // TODO Make this a macro!
         let map_conn_arc = self.connections.clone();
 
@@ -374,7 +377,7 @@ impl TCPImplementation for FTPServer {
             let mut handler = HandlerWrite::new(token, map_conn_arc.clone(), connection.clone());
             let write_result = handler.handle_write(&mut conn.request_type, &waker);
             if let Err(err) = &write_result {
-                println!("[WRITE_CONNECTION] - {} - Fatal error -> {}", token.0, err);
+                print_stdout!("[WRITE_CONNECTION] - {} - Fatal error -> {}", token.0, err);
                 return;
             }
             // We drop the connection mutex here because we are promising the callback that it's 100% safe to take
@@ -389,7 +392,7 @@ impl TCPImplementation for FTPServer {
             }
             drop(actions_locked);
             let _ = waker.wake();
-            println!("[WRITE_CONNECTION] - {} - Finished task", token.0);
+            print_stdout!("[WRITE_CONNECTION] - {} - Finished task", token.0);
         });
         Ok(())
     }
@@ -400,7 +403,7 @@ impl TCPImplementation for FTPServer {
         waker: Arc<Waker>,
         event: &Event,
     ) -> Result<(), Error> {
-        println!("[READ_CONNECTION] - {} - Start read", event.token().0);
+        print_stdout!("[READ_CONNECTION] - {} - Start read", event.token().0);
         // first read
         let map_conn = self.connections.clone();
         let map_conn = map_conn.lock().unwrap();
@@ -463,9 +466,10 @@ impl TCPImplementation for FTPServer {
                 }
             } else if is_error_for_closing_connection {
                 if let Err(err) = response {
-                    println!(
+                    print_stdout!(
                         "[READ_CONNECTION] - {} - Closing connection because error, {}",
-                        token.0, err
+                        token.0,
+                        err
                     );
                     let _ = FTPServer::shutdown(&mut connection_mutex);
                     drop(connection_mutex);
@@ -473,7 +477,7 @@ impl TCPImplementation for FTPServer {
                 }
             } else if is_would_block {
                 drop(connection_mutex);
-                println!("[READ_CONNECTION] - {} - Would block", token.0);
+                print_stdout!("[READ_CONNECTION] - {} - Would block", token.0);
                 let mut actions = actions.lock().unwrap();
                 actions.push((
                     handler_read.connection_token,
@@ -491,7 +495,7 @@ impl TCPImplementation for FTPServer {
                 }
                 // Finally drop the mutex
                 drop(connection_mutex);
-                println!("[READ_CONNECTION] - {} - Adding actions", token.0);
+                print_stdout!("[READ_CONNECTION] - {} - Adding actions", token.0);
                 let mut actions = actions.lock().unwrap();
                 for action in handler_read.actions {
                     actions.push(action);
@@ -499,7 +503,7 @@ impl TCPImplementation for FTPServer {
                 drop(actions);
                 let _ = waker.wake();
             }
-            println!("[READ_CONNECTION] - {} - Finishing task", token.0);
+            print_stdout!("[READ_CONNECTION] - {} - Finishing task", token.0);
         });
         Ok(())
     }
@@ -516,7 +520,7 @@ impl TCPImplementation for FTPServer {
         token: Token,
         waker: &Arc<Waker>,
     ) -> Result<(), Error> {
-        println!("[CLOSE_CONNECTION] - {} - Closing connection", token.0);
+        print_stdout!("[CLOSE_CONNECTION] - {} - Closing connection", token.0);
         let map_conn_arc = self.connections.clone();
         let map_conn = map_conn_arc.lock().unwrap();
         let conn = {
@@ -535,7 +539,7 @@ impl TCPImplementation for FTPServer {
                 let _ = poll.registry().deregister(stream);
                 let _ = stream.flush();
                 let _ = stream.shutdown(Shutdown::Both);
-                println!(
+                print_stdout!(
                     "[CLOSE_CONNECTION] - {} - Closing connection because maximum connections reached",
                     token.0
                 );
@@ -579,7 +583,7 @@ impl TCPImplementation for FTPServer {
                         Some(())
                     });
                 }
-                println!(
+                print_stdout!(
                     "[CLOSE_CONNECTION] - {} - Closing connection FTA or FTP",
                     token.0
                 );
@@ -589,7 +593,7 @@ impl TCPImplementation for FTPServer {
             }
 
             RequestType::CommandTransfer(stream, _, conn, _) => {
-                println!(
+                print_stdout!(
                     "[CLOSE_CONNECTION] - {} - Closing connection command",
                     token.0
                 );
@@ -610,7 +614,7 @@ impl TCPImplementation for FTPServer {
                     let mut map_conn = map_conn_arc.lock().unwrap();
                     let connection = map_conn.get_mut(conn);
                     if let Some(connection) = connection {
-                        println!(
+                        print_stdout!(
                             "[CLOSE_CONNECTION] - {} - Closing dangling connection",
                             token.0
                         );
@@ -624,7 +628,7 @@ impl TCPImplementation for FTPServer {
             }
 
             RequestType::PassiveModePort(stream, _) => {
-                println!("[CLOSE_CONNECTION] - {} - Closing port", token.0);
+                print_stdout!("[CLOSE_CONNECTION] - {} - Closing port", token.0);
                 // We actually just deregister when we write
                 poll.registry().deregister(stream)?;
             }
@@ -632,17 +636,17 @@ impl TCPImplementation for FTPServer {
 
         // Now delete it from the database
         if let Some(_) = self.connections.lock().unwrap().remove(&token) {
-            println!("[CLOSE_CONNECTION] Successfully removing the connection.");
+            print_stdout!("[CLOSE_CONNECTION] Successfully removing the connection.");
             if let RequestType::CommandTransfer(_, _, _, _) = &conn.request_type {
                 self.current_connections -= 1;
             }
-            println!(
+            print_stdout!(
                 "[CLOSE_CONNECTION] Current control connections - {}",
                 self.current_connections
             );
         }
 
-        println!(
+        print_stdout!(
             "[CLOSE_CONNECTION] Current overall connections - {}",
             self.connections.lock().unwrap().len()
         );
@@ -695,25 +699,25 @@ mod ftp_server_testing {
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
             log_in(&mut stream, "user_012", "123456");
             let srv = TcpListener::bind("127.0.0.1:2234").expect("to create server");
-            // println!("expect writing everything");
+            // print_stdout!("expect writing everything");
             stream
                 .write_all(&"PORT 127,0,0,1,8,186\r\n".as_bytes())
                 .expect("writing everything");
             let join = std::thread::spawn(move || {
-                // println!("accept conn");
+                // print_stdout!("accept conn");
                 let (mut conn, _) = srv.accept().expect("expect to receive connection");
                 let mut buff = [0; 1024];
-                // println!("read 1st");
+                // print_stdout!("read 1st");
                 let read = conn.read(&mut buff).expect("to have read");
                 let v = system::ls("./root/user_012").unwrap();
                 assert_eq!(v, &buff[..read]);
-                // println!("read 2nd");
+                // print_stdout!("read 2nd");
                 let possible_err = conn.read(&mut buff);
                 assert!(possible_err.unwrap() == 0);
             });
-            // println!("Command okay");
+            // print_stdout!("Command okay");
             expect_response(&mut stream, "200 Command okay.\r\n");
-            // println!("List");
+            // print_stdout!("List");
             stream
                 .write_all(&"LIST\r\n".as_bytes())
                 .expect("writing everything");
@@ -721,7 +725,7 @@ mod ftp_server_testing {
                 &mut stream,
                 "150 File status okay; about to open data connection.\r\n",
             );
-            // println!("Closing");
+            // print_stdout!("Closing");
             expect_response(&mut stream, "226 Closing data connection. Requested file action successful (for example, file transfer or file abort).\r\n");
             join.join().unwrap();
             std::thread::sleep(Duration::from_millis(20));
@@ -766,11 +770,11 @@ mod ftp_server_testing {
             let join = std::thread::spawn(move || {
                 let (mut conn, _) = srv.accept().expect("expect to receive connection");
                 let mut buff = [0; 1024];
-                // println!("read 1st");
+                // print_stdout!("read 1st");
                 let read = conn.read(&mut buff).expect("to have read");
                 let v = system::ls("./root/user_test_it_works_2").unwrap();
                 assert_eq!(v, &buff[..read]);
-                // println!("read 2nd");
+                // print_stdout!("read 2nd");
                 let possible_err = conn.read(&mut buff);
                 assert!(possible_err.unwrap() == 0);
             });

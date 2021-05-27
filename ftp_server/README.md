@@ -111,6 +111,9 @@ FLAGS:
 
 OPTIONS:
     -c, --capacity <CAPACITY>    Sets maximum concurrent connections [default: 500]
+    -d, --debug <DEBUG>          If it should write to stdout the logs [default: true]
+    -l, --log_file <LOG_FILE>    If it should write to the specified file the logs, don't pass anything to not use a log
+                                 file. [default: --none--]
     -p, --port <PORT>            Set port [default: 8080]
 ```
 

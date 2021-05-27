@@ -20,6 +20,8 @@ use std::{
     io::{Error, Write},
     net::Shutdown,
 };
+// #[macro_use]
+// use super::config::;
 use user_manage::{SystemUsers, User};
 
 pub struct HandlerRead {
@@ -174,7 +176,7 @@ impl HandlerRead {
                     return Ok(None);
                 }
 
-                println!(
+                print_stdout!(
                     "[HANDLE_READ] {} - {} bytes read",
                     self.connection_token.0, read
                 );
@@ -194,7 +196,7 @@ impl HandlerRead {
 
                 // Check if it's a valid command
                 if let Err(message) = possible_command {
-                    println!(
+                    print_stdout!(
                         "[HANDLE_READ] {} - User sent a bad command {}",
                         self.connection_token.0, message
                     );
@@ -263,8 +265,7 @@ impl HandlerRead {
                                         "Requested file action okay, completed."
                                     ));
                                     return Ok(None);                                
-                                }               
-                                println!("{:?}", rename_result.unwrap_err());                  
+                                }                                               
                             }
                         } 
                         to_write.reset_str("553 Requested action not taken. File name not allowed.\r\n");                                                
@@ -399,7 +400,7 @@ impl HandlerRead {
                     }
 
                     Command::User(username) => {                        
-                        println!(
+                        print_stdout!(
                             "[HANDLE_READ] {} - New user {}",
                             self.connection_token.0, username
                         );
@@ -904,7 +905,7 @@ impl HandlerRead {
 
             RequestType::FileTransferActive(stream, type_connection, _data_conn_token)
             | RequestType::FileTransferPassive(stream, type_connection, _data_conn_token) => {
-                println!("[HANDLE_READ] Yeah let's go");
+                print_stdout!("[HANDLE_READ] Yeah let's go");
                 if let Ok(should_close) = self.handle_file_type(stream, type_connection) {
                     if should_close {
                         let _ = stream.shutdown(Shutdown::Both);
@@ -927,7 +928,7 @@ impl HandlerRead {
     ) -> Result<bool, ()> {
         match transfer_type {
             FileTransferType::FileUpload(file, possible_response) => {
-                println!(
+                print_stdout!(
                     "[HANDLE_FILE_TYPE] {} - Reading from file transfer...",
                     self.connection_token.0
                 );
@@ -949,20 +950,20 @@ impl HandlerRead {
                     }
                     let err = file.write(&buff[..read_bytes]);
                     if err.is_err() {
-                        println!(
+                        print_stdout!(
                             "[HANDLE_FILE_TYPE] {} - Error writing to file {}...",
                             self.connection_token.0,
-                            err.unwrap_err()
+                            err.as_ref().unwrap_err()
                         );
                         return Err(());
                     }                                      
-                    println!(
+                    print_stdout!(
                         "[HANDLE_FILE_TYPE] {} - Successfully read...",
                         self.connection_token.0
                     );
                 } else if let Err(err) = read_result {
                     if err.kind() == ErrorKind::WouldBlock {
-                        println!(
+                        print_stdout!(
                             "[HANDLE_FILE_TYPE] {} - Would block...",
                             self.connection_token.0
                         );                        
@@ -974,7 +975,7 @@ impl HandlerRead {
                         return Ok(false);
                     }                    
                     *possible_response = Some(b"451 Requested action aborted: local error in processing.\r\n".to_vec());
-                    println!(
+                    print_stdout!(
                         "[HANDLE_FILE_TYPE] {} - Error Reading File: {}...",
                         self.connection_token.0, err
                     );
