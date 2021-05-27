@@ -87,3 +87,29 @@ RNTO <path><endline>
 -- Quits the command connection
 QUIT<endline>
 ```
+
+## Running
+
+We are building the project with the builtin package manager for Rust `cargo`
+
+```
+>> cargo run --release
+
+FTP Server 1.0
+Gabriel Villalonga @gabivlj
+Rodrigo Pereira @_
+Daniel Gracia @DaniGMX
+Simple to use FTP server, with multithreading and non-blocking behaviour in mind for maximum concurrent file transfers
+for multiple users.
+
+USAGE:
+    ftp_server [OPTIONS]
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+    -c, --capacity <CAPACITY>    Sets maximum concurrent connections [default: 500]
+    -p, --port <PORT>            Set port [default: 8080]
+```
