@@ -1,7 +1,9 @@
 ## FTP server done in Rust
 
-This FTP implementation is done in Rust. It's just a proof of concept and an university work
-so don't expect real use cases for this!
+- This FTP implementation is done in Rust. It's just a proof of concept and an university work
+  so don't expect real use cases for this!
+- Simple to use FTP server, with multithreading and non-blocking behaviour in mind for maximum concurrent file transfers
+  for multiple users.
 
 ### Implementation
 
