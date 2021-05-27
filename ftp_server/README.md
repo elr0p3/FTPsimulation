@@ -88,9 +88,9 @@ RNTO <path><endline>
 QUIT<endline>
 ```
 
-## Running
+## Running the server
 
-We are building the project with the builtin package manager for Rust `cargo`
+We are building the project with the builtin package manager for Rust `cargo`, so you need a stable rust installation available.
 
 ```
 >> cargo run --release
@@ -113,3 +113,11 @@ OPTIONS:
     -c, --capacity <CAPACITY>    Sets maximum concurrent connections [default: 500]
     -p, --port <PORT>            Set port [default: 8080]
 ```
+
+### Testing
+
+---
+
+- We are using the builtin tools for testing with cargo. `cargo test --release`
+- Note that you must run first the server to test the server. See `Running the server`.
+- The tests try to connect to the port 8080.
