@@ -2,6 +2,7 @@ package r0p3;
 
 import java.net.*;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.io.*;
 
 public class FileTransfer {
@@ -43,15 +44,8 @@ public class FileTransfer {
 
 
 	public void getPortPasive(String command) {
-		System.out.println("--- " + command);
 		String[] cmdSplit = command.split(" ");
-		for (int i = 0; i < cmdSplit.length; i++) {
-			System.out.println("-- " + cmdSplit[i]);
-		}
 		String[] parts = cmdSplit[cmdSplit.length - 1].trim().split(",");
-		for (int i = 0; i < parts.length; i++) {
-			System.out.println("- " + parts[i]);
-		}
 		int firstPart = Integer.parseInt(parts[parts.length - 2]);
 		int secondPart = Integer.parseInt(parts[parts.length - 1].split("\\)")[0]);
 		this.port = firstPart * 256 + secondPart;
@@ -90,38 +84,37 @@ public class FileTransfer {
 				break;
 			}
 		}
+		sCon.close();
 		return data;
 	}
 
 	public byte[] downloadFile() throws IOException {
-		// https://stackoverflow.com/questions/1176135/socket-send-and-receive-byte-array
+		int dataLen = 0;
+		ArrayList<Byte> list = new ArrayList<Byte>();
 
-		int dataLen = -1;
-		byte[] data = {};
-
-		// input = new DataInputStream(sCon.getInputStream());	   
-		// output = new DataOutputStream(sCon.getOutputStream());
-		
-		// while (dataLen != 0) {
-			dataLen = input.readInt();
-			data = new byte[dataLen]; 
+		while (dataLen != -1) {
+			byte[] data = new byte[1024]; 
         	
-			if (dataLen > 0) {
-				input.readFully(data, 0, dataLen);
+			dataLen = input.read(data);
+			for (int i = 0; i < dataLen; i++) {
+				list.add(data[i]);
 			}
-		// }
+		}
 
-		return data;
+		byte[] finalData = new byte[list.size()];
+		for (int i = 0; i < finalData.length; i++) {
+			finalData[i] = list.get(i);
+		}
+			
+		sCon.close();
+		return finalData;
 	}
 
 	public void uploadFile(byte[] data) throws IOException {
 		// https://stackoverflow.com/questions/1176135/socket-send-and-receive-byte-array
 
-		// input = new DataInputStream(sCon.getInputStream());	   
-		// output = new DataOutputStream(sCon.getOutputStream());
-		
-		output.writeInt(data.length);
 		output.write(data);
+		sCon.close();
 	}
 
 

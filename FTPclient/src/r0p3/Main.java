@@ -101,7 +101,7 @@ public class Main {
 					System.out.println("srv: " + rcv);
 				} 
 
-			ft.closeConnection();
+			// ft.closeConnection();
 			// Mode selected in the beginning
 			fc.sendCommand(mode);
 			rcv = fc.receiveCommand();
