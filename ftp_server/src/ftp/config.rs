@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::{stdout, Stdout, Write},
-    sync::{Mutex, MutexGuard},
-};
+use std::{fs::File, sync::Mutex};
 
 pub static mut DEBUG: bool = false;
 pub static mut STDOUT_FILE: Option<Mutex<File>> = None;

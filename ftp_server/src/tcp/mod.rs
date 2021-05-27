@@ -197,15 +197,15 @@ pub fn create_server<T: AsRef<str>>(
                                     continue;
                                 }
                                 _ => {
-                                    if let Err(err) = tcp_implementation.close_connection(
+                                    if let Err(_err) = tcp_implementation.close_connection(
                                         &poll,
                                         event.token(),
                                         &waker,
                                     ) {
-                                        println!(
-                                            "something happened when closing a socket: {}",
-                                            err
-                                        );
+                                        // println!(
+                                        //     "something happened when closing a socket: {}",
+                                        //     err
+                                        // );
                                     }
                                 }
                             }

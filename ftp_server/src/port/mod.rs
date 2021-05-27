@@ -1,4 +1,4 @@
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 
 /// Returns a random port, if it's none it means that every port in the machine is taken.
 pub fn get_random_port() -> Option<u16> {

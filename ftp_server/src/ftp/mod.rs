@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{stdout, Write},
+    io::Write,
     path::Path,
 };
 
@@ -25,16 +25,6 @@ use std::thread::spawn;
 use crate::tcp::TCPImplementation;
 
 use self::{handler_read::HandlerRead, handler_write::HandlerWrite};
-
-fn get_test_html(data: &str) -> Vec<u8> {
-    return format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-        data.len(),
-        data
-    )
-    .as_bytes()
-    .to_vec();
-}
 
 fn create_response(response_code: Response, message: &str) -> Vec<u8> {
     format!("{} {}\r\n", response_code.0, message).into_bytes()
@@ -96,11 +86,6 @@ pub enum FileTransferType {
     Buffer(BufferToWrite),
 }
 
-/// We need to think about still
-/// - storing user state (what do we need?)
-/// - storing file state in file transfer
-// TODO: Create user struct and all of that logic so we can keep a reference to a user in the request_context
-// #[derive(Debug)]
 pub enum RequestType {
     /// This request_type is only when we are instantly closing the connection after accepting it
     Closed(TcpStream),
@@ -132,9 +117,6 @@ pub struct RequestContext {
     user_id: Option<String>,
 
     loged: bool,
-
-    /// Filled when the command receives the renamefrom command
-    path_from: Option<String>,
 }
 
 impl RequestContext {
@@ -143,7 +125,6 @@ impl RequestContext {
             request_type,
             user_id: None,
             loged: false,
-            path_from: None,
         }
     }
 }
@@ -162,8 +143,6 @@ pub struct FTPServer {
     actions: ActionList,
 
     current_id: usize,
-
-    port: usize,
 
     // Maximum connections
     max_connections: usize,
@@ -184,7 +163,6 @@ impl FTPServer {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
             current_id: 0,
-            port: 50_000,
             max_connections: 50,
             current_connections: 0,
             actions: Arc::new(Mutex::new(Vec::new())),
@@ -195,14 +173,12 @@ impl FTPServer {
     }
 
     pub fn with_connection_capacity(max_connections: usize) -> Self {
-        print_stdout!("hola caracolas {}", 1);
         if !Path::new(ROOT).exists() {
             fs::create_dir(ROOT).expect("root dir hasn't been created");
         }
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
             current_id: 0,
-            port: 50_000,
             max_connections,
             current_connections: 0,
             actions: Arc::new(Mutex::new(Vec::new())),
@@ -217,30 +193,6 @@ impl FTPServer {
             token,
             Arc::new(Mutex::new(RequestContext::new(request_type))),
         );
-    }
-
-    fn new_passive_listener(
-        &mut self,
-        poll: &Poll,
-        command_transfer_conn: Token,
-    ) -> Result<(), String> {
-        let port = self.port;
-        self.port += 1;
-        let id = self.next_id();
-        let mut listener = TcpListener::bind(
-            format!("127.0.0.1:{}", port)
-                .parse()
-                .map_err(|_| format!("can't bind to this address"))?,
-        )
-        .map_err(|_| format!("can't bind to this port"))?;
-        poll.registry()
-            .register(&mut listener, Token(id), Interest::READABLE)
-            .map_err(|_| format!("cannot register this socket"))?;
-        self.add_connection(
-            Token(id),
-            RequestType::PassiveModePort(listener, command_transfer_conn),
-        );
-        Ok(())
     }
 
     fn deregister(&self, poll: &Poll, rc: &mut RequestContext) -> Result<(), Error> {
@@ -288,7 +240,7 @@ impl FTPServer {
                 stream.shutdown(Shutdown::Both)?;
             }
 
-            RequestType::PassiveModePort(port, _) => {}
+            RequestType::PassiveModePort(_port, _) => {}
         }
         Ok(())
     }

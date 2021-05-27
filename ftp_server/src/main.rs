@@ -2,7 +2,7 @@ pub mod ftp;
 pub mod port;
 pub mod system;
 pub mod tcp;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 
 use clap::{App, Arg};
 fn main() {

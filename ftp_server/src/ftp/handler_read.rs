@@ -1,7 +1,7 @@
 use super::{command::Command, response::Response, FileTransferType};
 use super::{
     create_response, Action, ActionList, BufferToWrite, HashMutex, RequestContext,
-    RequestContextMutex, RequestType, Token, ROOT,
+    RequestContextMutex, RequestType, Token,
 };
 use crate::system;
 use crate::port::{get_ftp_port_pair, get_random_port};
@@ -837,19 +837,7 @@ impl HandlerRead {
                         )));
                         connections.insert(Token(next_id), request_ctx);
                         return Ok(None);
-                    }
-
-                    // Test for when the user is logging in
-                    _ => {
-                        unimplemented!();
-                        // let username = "gabivlj";
-                        // // todo checking
-                        // let user_id = 3;
-                        // return Ok(Some(Box::new(move |mut ctx| {
-                        //     ctx.user_id = Some(user_id);
-                        //     ctx.loged = false;
-                        // })));
-                    }
+                    }                   
                 }
 
                 Ok(None)

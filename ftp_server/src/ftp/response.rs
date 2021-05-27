@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[derive(Clone, Copy, Debug)]
 pub struct Response(pub u16);
 

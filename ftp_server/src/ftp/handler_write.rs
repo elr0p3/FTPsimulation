@@ -1,48 +1,10 @@
 use super::{
-    create_response, Action, ActionList, BufferToWrite, FTPServer, HashMutex, RequestContextMutex,
-    RequestType, Token,
+    create_response, Action, BufferToWrite, HashMutex, RequestContextMutex, RequestType, Token,
 };
 use super::{response::Response, FileTransferType};
 use mio::{net::TcpStream, Interest, Waker};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::{io::Error, net::Shutdown};
-
-// pub fn close_connection_recursive(
-//     connection_database: HashMutex<Token, RequestContextMutex>,
-//     to_delete: Token,
-// ) -> Result<(), Error> {
-//     let map_conn_arc = connection_database.clone();
-//     let map_conn = map_conn_arc.lock().unwrap();
-//     let conn = {
-//         let connection = map_conn.get(&to_delete);
-//         if connection.is_none() {
-//             return Ok(());
-//         }
-//         let arc = connection.unwrap().clone();
-//         arc
-//     };
-//     drop(map_conn);
-//     connection_database.lock().unwrap().remove(&to_delete);
-//     let mut conn = conn.lock().unwrap();
-//     print_stdout!("[CLOSE_CONNECTION_RECURSIVE] Closing connection recursively");
-//     match &mut conn.request_type {
-//         RequestType::Closed(stream)
-//         | RequestType::FileTransferActive(stream, _, _)
-//         | RequestType::FileTransferPassive(stream, _, _) => {
-//             let _ = stream.shutdown(Shutdown::Both)?;
-//         }
-//         RequestType::CommandTransfer(stream, _, conn) => {
-//             // Ignore error to be honest, don't care if we try to close twice
-//             let _ = stream.shutdown(Shutdown::Both);
-//             let conn = conn.take();
-//             if let Some(conn) = &conn {
-//                 close_connection_recursive(map_conn_arc.clone(), *conn)?;
-//             }
-//         }
-//         RequestType::PassiveModePort(_, _) => {}
-//     }
-//     Ok(())
-// }
 
 pub struct HandlerWrite {
     connection_token: Token,
@@ -68,7 +30,7 @@ impl HandlerWrite {
         }
     }
 
-    fn keep_interest(&mut self, waker: &Waker, interest: Interest) -> Result<(), Error> {
+    fn keep_interest(&mut self, _waker: &Waker, interest: Interest) -> Result<(), Error> {
         self.actions
             .push((self.connection_token, self.connection.clone(), interest));
 
@@ -99,7 +61,7 @@ impl HandlerWrite {
                 stream.shutdown(Shutdown::Both)?;
             }
 
-            RequestType::CommandTransfer(stream, to_write, t, path_from) => {
+            RequestType::CommandTransfer(stream, to_write, _t, _path_from) => {
                 let maybe_error = stream.flush();
                 if let Err(err) = maybe_error {
                     print_stdout!("[HANDLE_WRITE] CMD Error flushing the stream: {}", err);
