@@ -1,7 +1,7 @@
 use super::{
     create_response, Action, BufferToWrite, HashMutex, RequestContextMutex, RequestType, Token,
 };
-use super::{response::Response, FileTransferType};
+use super::{response::ResponseCode, FileTransferType};
 use mio::{net::TcpStream, Interest, Waker};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::{io::Error, net::Shutdown};
@@ -128,7 +128,10 @@ impl HandlerWrite {
             let mut cmd = cmd_arc.lock().unwrap();
             if let RequestType::CommandTransfer(_stream, to_write, t, _) = &mut cmd.request_type {
                 t.take();
-                to_write.reset(create_response(Response::closing_data_connection(), msg));
+                to_write.reset(create_response(
+                    ResponseCode::closing_data_connection(),
+                    msg,
+                ));
                 self.actions
                     .push((cmd_connection_token, cmd_arc.clone(), Interest::WRITABLE));
             }
@@ -208,7 +211,7 @@ impl HandlerWrite {
                 let _ = self.close_connection(stream);
                 self.answer_command(
                     cmd_connection_token,
-                    "Closing data connection. Requested file action successful. (file transfer)",
+                    "Closing data connection. Requested file action successful (file transfer).",
                 );
                 Ok(())
             }
@@ -248,8 +251,8 @@ impl HandlerWrite {
                             cmd_connection_token
                         );
                         buffer_to_write.buffer = create_response(
-                            Response::closing_data_connection(),
-                            "Closing data connection. Requested file action successful (for example, file transfer or file abort).",
+                            ResponseCode::closing_data_connection(),
+                            "Closing data connection. Requested file action successful (file transfer).",
                         );
                         buffer_to_write.offset = 0;
                     } else {

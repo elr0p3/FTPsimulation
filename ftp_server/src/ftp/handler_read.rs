@@ -1,4 +1,4 @@
-use super::{command::Command, response::Response, FileTransferType};
+use super::{command::Command, response::ResponseCode, FileTransferType};
 use super::{
     create_response, Action, ActionList, BufferToWrite, HashMutex, RequestContext,
     RequestContextMutex, RequestType, Token,
@@ -196,7 +196,7 @@ impl HandlerRead {
                         self.connection.clone(),
                         Interest::WRITABLE,
                     ));
-                    to_write.reset_str("503 Bad sequence of commands.\r\n");
+                    to_write.reset(create_response(ResponseCode::bad_sequence_of_commands(), "Bad sequence of commands."));
                     return Ok(None);
                 }
 
@@ -210,7 +210,7 @@ impl HandlerRead {
                         self.connection_token.0, message
                     );
                     to_write.reset(create_response(
-                        Response::bad_sequence_of_commands(),
+                        ResponseCode::bad_sequence_of_commands(),
                         message,
                     ));
                     self.actions.push((
@@ -231,7 +231,7 @@ impl HandlerRead {
                         self.connection.clone(),
                         Interest::WRITABLE,
                     ));
-                    to_write.reset_str("531 Unauthorized.\r\n");
+                    to_write.reset(create_response(ResponseCode::unauthorized(), "Unauthorized."));                
                     return Ok(None);
                 }
 
@@ -245,11 +245,11 @@ impl HandlerRead {
                         if let Ok(path) = self.handle_user_path(from) {
                             *path_from = Some(path);
                             to_write.reset(create_response(
-                                Response::file_action_pending(), "Requested file action pending further information."));
+                                ResponseCode::file_action_pending(), "Requested file action pending further information."));
                             return Ok(None);
                         }
                         to_write.reset(create_response(
-                            Response::file_unavailable(), "File unavailable, file not found."));
+                            ResponseCode::file_unavailable(), "File unavailable, file not found."));
                     } 
 
                     Command::RenameTo(to) => {
@@ -270,14 +270,17 @@ impl HandlerRead {
                                 let rename_result = system::rename(from.to_str().unwrap(), to.as_str());
                                 if rename_result.is_ok() {
                                     to_write.reset(create_response(
-                                        Response::file_action_okay(),
+                                        ResponseCode::file_action_okay(),
                                         "Requested file action okay, completed."
                                     ));
                                     return Ok(None);                                
                                 }                                               
                             }
                         } 
-                        to_write.reset_str("553 Requested action not taken. File name not allowed.\r\n");                                                
+                        to_write.reset(
+                            create_response(ResponseCode::file_action_not_taken(), "Requested action not taken. File name not allowed.")
+                        );
+                       
                     }
 
                     Command::CurrentDirectory => {
@@ -290,7 +293,7 @@ impl HandlerRead {
                         let user = users_db.get_user_clone(self.user_id.as_ref().unwrap()).unwrap();
                         drop(users_db);
                         to_write.reset(
-                            create_response(Response::directory_action_okay(), &user.total_path_and_decano())
+                            create_response(ResponseCode::directory_action_okay(), &user.total_path_and_decano())
                         );
                     }
 
@@ -307,13 +310,13 @@ impl HandlerRead {
                         drop(users_db);
                         if result.is_err() {
                             to_write.reset(create_response(
-                                Response::file_unavailable(),
+                                ResponseCode::file_unavailable(),
                                 "Requested action not taken. File unavailable, file not found.",
                             ));
                             return Ok(None);
                         } 
                         to_write.reset(create_response(
-                            Response::file_action_okay(),
+                            ResponseCode::file_action_okay(),
                             "Requested file action okay, completed.",
                         ));
                         return Ok(None);
@@ -344,16 +347,19 @@ impl HandlerRead {
                             // Mark the listener as readable so we can read new connections
                             self.actions.push((Token(next_id), arc, Interest::READABLE));
                             let (first_part, second_part) = get_ftp_port_pair(port);
-                            to_write.reset_str(
-                                format!(
-                                    "227 Entering Passive Mode (0,0,0,0,{},{})\r\n",
-                                    first_part, second_part
+                            to_write.reset(
+                                create_response(
+                                    ResponseCode::passive_ok(),
+                                    format!(
+                                        "Entering Passive Mode (0,0,0,0,{},{})",
+                                        first_part, second_part
+                                    )
+                                    .as_str()
                                 )
-                                .as_str(),
-                            );
+                            );                            
                             return Ok(None);
                         }
-                        to_write.reset_str("541 All ports are taken.\r\n");
+                        to_write.reset(create_response(ResponseCode::all_ports_taken(), "All ports taken."));                        
                         return Ok(None);
                     }
 
@@ -363,8 +369,11 @@ impl HandlerRead {
                             self.connection.clone(),
                             Interest::WRITABLE,
                         ));
-
-                        to_write.reset_str("221 Service closing control connection.\r\n");
+                        to_write.reset(
+                            create_response(
+                                ResponseCode::closing_control_connection_success(),
+                                "Service closing control connection.",                                
+                            ));
                         let conn = self.connection.clone();
                         to_write.callback_after_sending = Some(Box::new(move || {
                             let connection = conn.lock().unwrap();
@@ -388,11 +397,11 @@ impl HandlerRead {
                             if !db.user_exists(&user_id) {
                                 let user = db.create_user(&user_id, pwd);
                                 if user.is_err() {
-                                    to_write.reset_str("530 Not logged in.\r\n");
+                                    to_write.reset(create_response(ResponseCode::unauthorized(), "Not logged in."));
                                     return Ok(None);
-                                }
+                                }                                
                                 to_write.reset(create_response(
-                                    Response::login_success(),
+                                    ResponseCode::login_success(),
                                     "User logged in, proceed.",
                                 ));
                                 return Ok(Some(Box::new(|ctx| {
@@ -401,17 +410,17 @@ impl HandlerRead {
                             }
                             if db.has_passwd(user_id, pwd) {
                                 to_write.reset(create_response(
-                                    Response::login_success(),
+                                    ResponseCode::login_success(),
                                     "User logged in, proceed.",
                                 ));
                                 return Ok(Some(Box::new(move |ctx| {                                
                                     ctx.loged = true;
                                 })));
                             }
-                            to_write.reset_str("530 Not logged in.\r\n");
+                            to_write.reset(create_response(ResponseCode::unauthorized(), "Not logged in."));
                             return Ok(None);
                         }
-                        to_write.reset_str("530 Not logged in.\r\n");
+                        to_write.reset(create_response(ResponseCode::unauthorized(), "Not logged in."));
                         return Ok(None);
                     }
 
@@ -426,7 +435,7 @@ impl HandlerRead {
                             Interest::WRITABLE,
                         ));
                         to_write.reset(create_response(
-                            Response::username_okay(),
+                            ResponseCode::username_okay(),
                             "User name okay, need password.",
                         ));
                         let username = username.to_string();
@@ -446,19 +455,19 @@ impl HandlerRead {
                             let result = fs::remove_file(path);
                             if let Err(_err) = result {
                                 to_write.reset(create_response(
-                                    Response::file_unavailable(),
+                                    ResponseCode::file_unavailable(),
                                     "Requested action not taken. File unavailable, file not found.",
                                 ));
                                 return Ok(None);
                             } 
                             to_write.reset(create_response(
-                                Response::file_action_okay(),
+                                ResponseCode::file_action_okay(),
                                 "Requested file action okay, completed.",
                             ));
                             return Ok(None);
                         }  else { 
                             to_write.reset(create_response(
-                                Response::file_unavailable(),
+                                ResponseCode::file_unavailable(),
                                 "Requested action not taken. File unavailable, file not found.",
                             ));
                             return Ok(None);
@@ -475,7 +484,7 @@ impl HandlerRead {
                             let result = fs::remove_dir_all(path);
                             if let Err(_err) = result {
                                 to_write.reset(create_response(
-                                    Response::file_unavailable(),
+                                    ResponseCode::file_unavailable(),
                                     "Requested action not taken. File unavailable, file not found.",
                                 ));
                                 return Ok(None);
@@ -485,13 +494,13 @@ impl HandlerRead {
                             self.safe_change_dir_for_user();
 
                             to_write.reset(create_response(
-                                Response::file_action_okay(),
+                                ResponseCode::file_action_okay(),
                                 "Requested file action okay, completed.",
                             ));
                             return Ok(None);
                         }  else { 
                             to_write.reset(create_response(
-                                Response::file_unavailable(),
+                                ResponseCode::file_unavailable(),
                                 "Requested action not taken. File unavailable, file not found.",
                             ));
                             return Ok(None);
@@ -507,7 +516,7 @@ impl HandlerRead {
 
                         if let None = data_connection {
                             to_write.reset(create_response(
-                                Response::bad_sequence_of_commands(),
+                                ResponseCode::bad_sequence_of_commands(),
                                 "Bad sequence of commands.",
                             ));
                             return Ok(None);
@@ -516,7 +525,7 @@ impl HandlerRead {
                             let file = File::open(path);
                             if let Err(_) = file {
                                 to_write.reset(create_response(
-                                    Response::file_unavailable(),
+                                    ResponseCode::file_unavailable(),
                                     "Requested action not taken. File unavailable, file not found.",
                                 ));
                                 return Ok(None);
@@ -527,7 +536,7 @@ impl HandlerRead {
                             let data_transfer_conn = connection_db.get_mut(&token_data_conn);
                             if data_transfer_conn.is_none() {
                                 to_write.reset(create_response(
-                                    Response::file_unavailable(),
+                                    ResponseCode::file_unavailable(),
                                     "Requested action not taken. File unavailable, no access.",
                                 ));
                                 return Ok(None);
@@ -540,13 +549,13 @@ impl HandlerRead {
                                 .handle_file_transfer_download(&mut data_transfer_conn_mutex, file)
                             {
                                 to_write.reset(create_response(
-                                    Response::file_unavailable(),
+                                    ResponseCode::file_unavailable(),
                                     "Requested action not taken. File unavailable, file not found.",
                                 ));
                             } else {
                                 to_write.reset(create_response(
-                                    Response::file_status_okay(),
-                                    "File download starts!",
+                                    ResponseCode::file_status_okay(),
+                                    "File status okay; about to open data connection.",
                                 ));
                                 let ctx = data_transfer_conn.clone();
                                 let cb = move || {
@@ -560,7 +569,7 @@ impl HandlerRead {
                             }
                         } else {
                             to_write.reset(create_response(
-                                Response::file_unavailable(),
+                                ResponseCode::file_unavailable(),
                                 "Requested action not taken. File unavailable, file not found.",
                             ));
                             return Ok(None);
@@ -575,7 +584,7 @@ impl HandlerRead {
                         ));
                         let mut callback_error = || {
                             to_write.reset(create_response(
-                                Response::file_unavailable(),
+                                ResponseCode::file_unavailable(),
                                 "Requested action not taken. File unavailable, no access.",
                             ));
                         };
@@ -613,7 +622,7 @@ impl HandlerRead {
                             }
                             let resp = format!("'{}' directory created.", child);
                             to_write.reset(create_response(
-                                Response::directory_action_okay(),
+                                ResponseCode::directory_action_okay(),
                                 resp.as_str(),
                             ));
                         } else {
@@ -630,7 +639,7 @@ impl HandlerRead {
                         ));
                         let mut callback_error = || {
                             to_write.reset(create_response(
-                                Response::file_unavailable(),
+                                ResponseCode::file_unavailable(),
                                 "Requested action not taken. File unavailable, no access.",
                             ));
                         };
@@ -699,7 +708,7 @@ impl HandlerRead {
                                     // HEH... I don't know but Rust doesn't get that this really needs to die here!
                                     drop(conn_lock);
                                     to_write.reset(create_response(
-                                        Response::file_status_okay(),
+                                        ResponseCode::file_status_okay(),
                                         "File status okay; about to open data connection.",
                                     ));
                                     to_write.callback_after_sending =
@@ -728,14 +737,14 @@ impl HandlerRead {
                         // This means that the user hasn't opened a port or connected
                         if let None = data_connection {
                             to_write.reset(create_response(
-                                Response::bad_sequence_of_commands(),
+                                ResponseCode::bad_sequence_of_commands(),
                                 "Bad sequence of commands.",
                             ));
                             return Ok(None);
                         }
                         // All okay, transition
                         to_write.reset(create_response(
-                            Response::file_status_okay(),
+                            ResponseCode::file_status_okay(),
                             "File status okay; about to open data connection.",
                         ));
 
@@ -793,14 +802,14 @@ impl HandlerRead {
                                 to_write.callback_after_sending = Some(Box::new(callback));
                             } else {
                                 to_write.reset(create_response(
-                                    Response::file_unavailable(),
+                                    ResponseCode::file_unavailable(),
                                     "Requested action not taken. File unavailable, no access.",
                                 ));
                             }
                         } else {
                             // Inform the user that we couldn't find the data connection
                             to_write.reset(create_response(
-                                Response::cant_open_data_connection(),
+                                ResponseCode::cant_open_data_connection(),
                                 "Can't open data connection.",
                             ));
                         }
@@ -830,7 +839,7 @@ impl HandlerRead {
                         // Handle error where the connection is not opened by the client
                         if connection.is_err() {
                             to_write.reset(create_response(
-                                Response::bad_sequence_of_commands(),
+                                ResponseCode::bad_sequence_of_commands(),
                                 "Bad sequence of commands.",
                             ));
                             return Ok(None);
@@ -840,7 +849,7 @@ impl HandlerRead {
                         // to the request context of the file transfer)
                         *data_connection = Some(Token(next_id));
 
-                        to_write.reset(create_response(Response::command_okay(), "Command okay."));
+                        to_write.reset(create_response(ResponseCode::command_okay(), "Command okay."));
 
                         drop(command_connection);
 
@@ -895,7 +904,7 @@ impl HandlerRead {
                     {
                         *f = Some(Token(next_id));
                         // *TODO Needs better response 
-                        buff.reset(create_response(Response::command_okay(), "Command okay."));
+                        buff.reset(create_response(ResponseCode::command_okay(), "Command okay."));
                         self.actions
                             .push((*command_conn_ref, command_conn_arc, Interest::WRITABLE))
                     }
@@ -948,8 +957,8 @@ impl HandlerRead {
                     if read_bytes == 0 {
                         *possible_response = 
                         Some(create_response(
-                            Response::success_uploading_file(), 
-                            "Closing data connection. Requested file action successful (for example, file transfer or file abort)."
+                            ResponseCode::success_uploading_file(), 
+                            "Closing data connection. Requested file action successful (file transfer)."
                         ));             
                         return Ok(true);
                     }

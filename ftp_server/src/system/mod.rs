@@ -1,6 +1,6 @@
 use std::{
     io::{self, Error, ErrorKind},
-    path::{Component, Components, Path},
+    path::Path,
 };
 
 use std::fs;
