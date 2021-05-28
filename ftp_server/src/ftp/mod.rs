@@ -67,11 +67,6 @@ impl BufferToWrite {
         self.buffer = vector;
         self.offset = 0;
     }
-
-    fn reset_str(&mut self, vector: &str) {
-        self.buffer = vector.as_bytes().to_vec();
-        self.offset = 0;
-    }
 }
 
 // #[derive(Debug)]
