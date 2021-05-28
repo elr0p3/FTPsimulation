@@ -6,7 +6,7 @@ c:
 
 
 r: 
-	java -classpath ./build/ r0p3.Main localhost 8080
+	java -classpath ./build/ r0p3.Main localhost 21
 
 
 clean:
