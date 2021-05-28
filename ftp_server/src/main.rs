@@ -15,7 +15,7 @@ fn main() {
                 .short("p")
                 .long("port")
                 .value_name("PORT")
-                .default_value("21")
+                .default_value("8080")
                 .help("Set port")
                 .takes_value(true),
         )
