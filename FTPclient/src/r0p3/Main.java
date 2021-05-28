@@ -66,7 +66,6 @@ public class Main {
 			if (rcv != null) {
 				System.out.println("srv: " + rcv);
 				result = sc.interpretStatusCode(command, rcv, cmd, ft);
-				System.out.println("MARIKONG - " + result);
 
 				if (result == StatusCode.EXIT) {
 					break;
