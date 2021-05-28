@@ -782,7 +782,7 @@ mod ftp_server_testing {
             stream
                 .write_all(&"QUIT\r\n".as_bytes())
                 .expect("writing everything");
-            expect_response(&mut stream, "28080 Service closing control connection.\r\n");
+            expect_response(&mut stream, "221 Service closing control connection.\r\n");
             join.join().unwrap();
             std::thread::sleep(Duration::from_millis(20));
         }
