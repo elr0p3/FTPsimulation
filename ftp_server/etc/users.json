@@ -1,68 +1,23 @@
 {
-  "user_delete_its_own_directory_test": {
-    "passwd": "123456",
-    "chroot": "./root/user_delete_its_own_directory_test",
-    "uid": 13
-  },
-  "user_01": {
-    "passwd": "123456",
-    "chroot": "./root/user_01",
-    "uid": 0
-  },
-  "user_test_create_file_delete": {
-    "passwd": "123456",
-    "chroot": "./root/user_test_create_file_delete",
-    "uid": 7
-  },
-  "user_rnto_test": {
-    "passwd": "123456",
-    "chroot": "./root/user_rnto_test",
-    "uid": 10
-  },
-  "user_test_image_transfer_02": {
-    "passwd": "123456",
-    "chroot": "./root/user_test_image_transfer_02",
-    "uid": 4
-  },
-  "user_test_mkdir_01": {
-    "passwd": "123456",
-    "chroot": "./root/user_test_mkdir_01",
-    "uid": 6
-  },
-  "user_store_2_test": {
-    "passwd": "123456",
-    "chroot": "./root/user_store_2_test",
-    "uid": 12
-  },
-  "user_test_it_works_2": {
-    "passwd": "123456",
-    "chroot": "./root/user_test_it_works_2",
-    "uid": 1
-  },
   "user_store_test": {
     "passwd": "123456",
     "chroot": "./root/user_store_test",
     "uid": 11
-  },
-  "nombre": {
-    "passwd": "pass",
-    "chroot": "./root/nombre",
-    "uid": 15
   },
   "user_test_image_transfer": {
     "passwd": "123456",
     "chroot": "./root/user_test_image_transfer",
     "uid": 2
   },
-  "user_test_cwd_test": {
-    "passwd": "123456",
-    "chroot": "./root/user_test_cwd_test",
-    "uid": 8
-  },
   "n": {
     "passwd": "n",
     "chroot": "./root/n",
     "uid": 14
+  },
+  "user_store_text_test": {
+    "passwd": "123456",
+    "chroot": "./root/user_store_text_test",
+    "uid": 18
   },
   "user_test_cwd_test": {
     "passwd": "123456",
@@ -74,9 +29,64 @@
     "chroot": "./root/user_recv_test",
     "uid": 14
   },
+  "user_rnto_test": {
+    "passwd": "123456",
+    "chroot": "./root/user_rnto_test",
+    "uid": 10
+  },
+  "user_store_2_test": {
+    "passwd": "123456",
+    "chroot": "./root/user_store_2_test",
+    "uid": 12
+  },
   "user_012": {
     "passwd": "123456",
     "chroot": "./root/user_012",
     "uid": 5
+  },
+  "user_pwd_test": {
+    "passwd": "123456",
+    "chroot": "./root/user_pwd_test",
+    "uid": 17
+  },
+  "user_test_image_transfer_02": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_image_transfer_02",
+    "uid": 4
+  },
+  "user_test_it_works_3": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_it_works_3",
+    "uid": 16
+  },
+  "user_test_it_works_2": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_it_works_2",
+    "uid": 1
+  },
+  "user_test_mkdir_01": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_mkdir_01",
+    "uid": 6
+  },
+  "user_test_create_file_delete": {
+    "passwd": "123456",
+    "chroot": "./root/user_test_create_file_delete",
+    "uid": 7
+  },
+  "user_delete_its_own_directory_test": {
+    "passwd": "123456",
+    "chroot": "./root/user_delete_its_own_directory_test",
+    "uid": 13
+  },
+  "user_01": {
+    "passwd": "123456",
+    "chroot": "./root/user_01",
+    "uid": 0
+  },
+  "nombre": {
+    "passwd": "pass",
+    "chroot": "./root/nombre",
+    "uid": 15
   }
 }
