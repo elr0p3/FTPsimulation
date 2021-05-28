@@ -43,7 +43,7 @@ public class FileTransfer {
 	}
 
 
-	public void getPortPasive(String command) {
+	public void setPortPasive(String command) {
 		String[] cmdSplit = command.split(" ");
 		String[] parts = cmdSplit[cmdSplit.length - 1].trim().split(",");
 		int firstPart = Integer.parseInt(parts[parts.length - 2]);
