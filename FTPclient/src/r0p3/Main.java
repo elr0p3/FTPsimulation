@@ -33,7 +33,7 @@ public class Main {
 		fc.sendCommand(passwd);
 		rcv = fc.receiveCommand();
 		System.out.println("srv: " + rcv);
-		result = sc.interpretStatusCode(passwd, rcv);
+		result = sc.interpretStatusCode(passwd, rcv, cmd, ft);
 
 		if (result == StatusCode.ERROR) {
 			fc.close();
@@ -47,7 +47,7 @@ public class Main {
 		rcv = fc.receiveCommand();
 		System.out.println("srv: " + rcv);
 		if (mode.startsWith(Command.PASIVE)) {
-			ft.getPortPasive(rcv);
+			ft.setPortPasive(rcv);
 			ft.startPasive();
 			rcv = fc.receiveCommand();
 			System.out.println("srv: " + rcv);
@@ -65,31 +65,15 @@ public class Main {
 			
 			if (rcv != null) {
 				System.out.println("srv: " + rcv);
-				result = sc.interpretStatusCode(command, rcv);
+				result = sc.interpretStatusCode(command, rcv, cmd, ft);
 
 				if (result == StatusCode.EXIT) {
-					fc.close();
-					ft.closeConnection();
 					break;
 
-				} else if (result == StatusCode.LIST) {
-					String data = ft.listFile();
-					System.out.println(data);
-					rcv = fc.receiveCommand();
-					System.out.println("srv: " + rcv);
-
-				} else if (result == StatusCode.DOWN) {
-					byte[] data = ft.downloadFile();
-					String filename = cmd.inputData("local");
-					ft.storeDataFile(data, filename);
-					rcv = fc.receiveCommand();
-					System.out.println("srv: " + rcv);
-
-				} else if (result == StatusCode.UP) {
-					// command.split(" ")[1].trim()
-					String filename = cmd.inputData("local");
-					byte[] data = ft.getDataFile(filename);
-					ft.uploadFile(data);
+				} else if (result == StatusCode.LIST
+						|| result == StatusCode.DOWN
+						|| result == StatusCode.UP) {
+					
 					rcv = fc.receiveCommand();
 					System.out.println("srv: " + rcv);
 
@@ -101,12 +85,11 @@ public class Main {
 					System.out.println("srv: " + rcv);
 				} 
 
-			// ft.closeConnection();
 			// Mode selected in the beginning
 			fc.sendCommand(mode);
 			rcv = fc.receiveCommand();
 			if (mode.startsWith(Command.PASIVE)) {
-				ft.getPortPasive(rcv);
+				ft.setPortPasive(rcv);
 				ft.startPasive();
 				rcv = fc.receiveCommand();
 			} else {
@@ -121,6 +104,7 @@ public class Main {
 			}
 		}
 		
+		fc.close();
 		ft.closeConnection();
 	}
 
