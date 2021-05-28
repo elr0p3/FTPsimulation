@@ -155,8 +155,7 @@ impl HandlerWrite {
                 loop {
                     let read = file.read(&mut buf);
                     if read.is_err() {
-                        //...
-                        panic!("Unhandled error");
+                        break;
                     }
                     let read = read.unwrap();
                     if read == 0 {
@@ -280,13 +279,6 @@ impl HandlerWrite {
             );
         } else if let Err(err) = written {
             if err.kind() == ErrorKind::WouldBlock {
-                std::fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open("./debug_write.txt")
-                    .unwrap()
-                    .write(format!("\nWRITE {:?}", err).as_bytes())
-                    .unwrap();
                 print_stdout!(
                     "[WRITE_BUFFER_FILE_TRANSFER] {} - Would block error, keep writing",
                     self.connection_token.0
