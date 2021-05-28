@@ -621,7 +621,7 @@ mod ftp_server_testing {
     #[test]
     fn it_works() {
         for _ in 0..100 {
-            let result = TcpStream::connect("127.0.0.1:21");
+            let result = TcpStream::connect("127.0.0.1:8080");
             if let Err(err) = result {
                 panic!("{}", err);
             }
@@ -686,7 +686,7 @@ mod ftp_server_testing {
     #[test]
     fn it_works2() {
         for _ in 0..100 {
-            let mut stream = TcpStream::connect("127.0.0.1:21").unwrap();
+            let mut stream = TcpStream::connect("127.0.0.1:8080").unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
             log_in(&mut stream, "user_test_it_works_2", "123456");
             let srv = TcpListener::bind("127.0.0.1:2235").expect("to create server");
@@ -752,7 +752,7 @@ mod ftp_server_testing {
     #[test]
     fn it_works3() {
         for _ in 0..100 {
-            let result = TcpStream::connect("127.0.0.1:21");
+            let result = TcpStream::connect("127.0.0.1:8080");
             let mut stream = result.unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
             log_in(&mut stream, "user_test_it_works_3", "123456");
@@ -790,7 +790,7 @@ mod ftp_server_testing {
 
     #[test]
     fn image_transfer() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_test_image_transfer", "123456");
@@ -834,7 +834,7 @@ mod ftp_server_testing {
     #[test]
     fn image_transfer_02() {
         for _i in 0..100 {
-            let result = TcpStream::connect("127.0.0.1:21");
+            let result = TcpStream::connect("127.0.0.1:8080");
             let mut stream = result.unwrap();
             expect_response(&mut stream, "220 Service ready for new user.\r\n");
             log_in(&mut stream, "user_test_image_transfer_02", "123456");
@@ -929,7 +929,7 @@ mod ftp_server_testing {
 
     #[test]
     fn mkdir() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_test_mkdir_01", "123456");
@@ -972,7 +972,7 @@ mod ftp_server_testing {
 
     #[test]
     fn cwd_test() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_test_cwd_test", "123456");
@@ -1023,7 +1023,7 @@ mod ftp_server_testing {
 
     #[test]
     fn create_file_delete() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_test_create_file_delete", "123456");
@@ -1097,7 +1097,7 @@ mod ftp_server_testing {
     //cargo test --package ftp_server --bin ftp_server -- ftp::ftp_server_testing::pwd_test --exact --nocapture
     #[test]
     fn pwd_test() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_pwd_test", "123456");
@@ -1119,7 +1119,7 @@ mod ftp_server_testing {
 
     #[test]
     fn recv_test() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_recv_test", "123456");
@@ -1130,7 +1130,7 @@ mod ftp_server_testing {
 
     #[test]
     fn store_text_test() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_store_text_test", "123456");
@@ -1139,7 +1139,7 @@ mod ftp_server_testing {
 
     #[test]
     fn store_test() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_store_test", "123456");
@@ -1157,7 +1157,7 @@ mod ftp_server_testing {
 
     #[test]
     fn store_2_test() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_store_2_test", "123456");
@@ -1174,7 +1174,7 @@ mod ftp_server_testing {
 
     #[test]
     fn rnto_test() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_rnto_test", "123456");
@@ -1190,7 +1190,7 @@ mod ftp_server_testing {
 
     #[test]
     fn delete_its_own_directory_test() {
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_delete_its_own_directory_test", "123456");
@@ -1211,7 +1211,7 @@ mod ftp_server_testing {
     fn passive_connection() {
         // We could reduce these steps to functions and reuse them but its ok
         // at the moment
-        let result = TcpStream::connect("127.0.0.1:21");
+        let result = TcpStream::connect("127.0.0.1:8080");
         let mut stream = result.unwrap();
         expect_response(&mut stream, "220 Service ready for new user.\r\n");
         log_in(&mut stream, "user_test_image_transfer_02", "123456");

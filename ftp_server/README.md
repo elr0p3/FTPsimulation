@@ -116,7 +116,7 @@ OPTIONS:
     -d, --debug <DEBUG>          If it should write to stdout the logs [default: true]
     -l, --log_file <LOG_FILE>    If it should write to the specified file the logs, don't pass anything to not use a log
                                  file. [default: --none--]
-    -p, --port <PORT>            Set port [default: 21]
+    -p, --port <PORT>            Set port [default: 8080]
 ```
 
 - It's worth noting that there should be a root folder and etc folder
@@ -128,4 +128,4 @@ OPTIONS:
 
 - We are using the builtin tools for testing with cargo. `cargo test --release`
 - Note that you must run first the server to test the server (obviously). See `Running the server`.
-- The tests try to connect to the port 21, just running the default server config on the root of the project is enough.
+- The tests try to connect to the port 8080, just running the default server config on the root of the project is enough.
